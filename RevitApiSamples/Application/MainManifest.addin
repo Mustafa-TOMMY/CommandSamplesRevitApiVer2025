@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+	<AddIn Type="Command">
+		<!-- Add-in name in Revit -->
+		<Name>Pick Element</Name>
+		
+		<!-- DLL file path -->
+		<Assembly>RevitApiSamples.dll</Assembly>
+
+		<!-- Namespace.ClassName -->
+		<FullClassName>RevitApiSamples.Samples.Selections.Commands.PickingElementCommand</FullClassName>
+
+		<Description>User Can Pick One Element</Description>
+		<!-- GUID -->
+		<AddInId>
+			1F55CA18-A3BD-4011-B673-395B7A0AB82B
+		</AddInId>
+
+		<!-- the Button name in Revit -->
+		<Text>Pick Element</Text>
+
+		<!-- Dev MetaData -->
+		<VendorId>Dev name</VendorId>
+		<VendorDescription>Dev description</VendorDescription>
+
+	</AddIn>
+</RevitAddIns>

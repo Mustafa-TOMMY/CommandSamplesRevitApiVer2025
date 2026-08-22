@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="RevitAPI">
+			<HintPath>C:\Program Files\Autodesk\Revit 2025\RevitAPI.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+		<Reference Include="RevitAPIUI">
+			<HintPath>C:\Program Files\Autodesk\Revit 2025\RevitAPIUI.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <None Update="Application\MainManifest.addin">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </None>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="Infrastructure\" />
+	</ItemGroup>
+	
+	<!-- in case you did not download sdk file make uncomment to this part -->
+	<!--<Target Name="CopyAddInFiles" AfterTargets="PostBuildEvent">
+
+		<Copy SourceFiles="$(ProjectDir)*.addin"
+			  DestinationFolder="C:\ProgramData\Autodesk\Revit\Addins\2025\"
+			  SkipUnchangedFiles="true"
+			  ContinueOnError="true" />
+
+		<ItemGroup>
+			<AllOutputFiles Include="$(TargetDir)*.*" />
+		</ItemGroup>
+
+		<Copy SourceFiles="@(AllOutputFiles)"
+			  DestinationFolder="C:\ProgramData\Autodesk\Revit\Addins\2025\"
+			  SkipUnchangedFiles="true" />
+	</Target>-->
+
+</Project>

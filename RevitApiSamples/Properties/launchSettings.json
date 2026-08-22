@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "RevitApiSamples": {
+      "commandName": "Project"
+    },
+    "RunExternalApp": {
+      "commandName": "Executable",
+      "executablePath": "C:\\Program Files\\Autodesk\\Revit 2025\\Revit.exe",
+      "workingDirectory": "C:\\Program Files\\Autodesk\\Revit 2025"
+    }
+  }
+}
