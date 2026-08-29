@@ -169,6 +169,17 @@ if (parameter != null)
 | **Built-in Enum** | `element.get_Parameter(BuiltInParameter.WALL_ATTR_WIDTH_PARAM)` | 🛡️ Maximum | ✅ Yes | ✅ Yes (fixed internal enum ID) |
 | **Shared GUID** | `element.get_Parameter(new Guid("..."))` | 🛡️ Maximum | ✅ Yes | ✅ Yes (universally unique 128-bit GUID) |
 
+### `element.ParametersMap` — The 4th Access Method (Legacy)
+
+> [!NOTE]
+> `element.ParametersMap` returns a `ParameterMap` object — a dictionary-like collection that lets you access a parameter by name using `.get_Item("ParameterName")`. It is **not recommended** for production add-ins as it shares the same weaknesses as `LookupParameter` (name-based, localization-sensitive, duplicate-name unsafe) with no added benefit.
+
+| Method | API Call | Notes |
+| :--- | :--- | :--- |
+| **ParameterMap** | `element.ParametersMap.get_Item("Width")` | Legacy name-based dictionary. Same risks as `LookupParameter`. Avoid in production. |
+
+Prefer `get_Parameter(BuiltInParameter)` or `get_Parameter(Guid)` in all production scenarios.
+
 ---
 
 ## 4. Built-in Parameters
