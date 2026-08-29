@@ -181,3 +181,264 @@ Enables scheduling and tagging across project views.
 | `familyMgr.Parameters` | Returns `FamilyParameterSet` of parameters defined in the family. | `FamilyParameterSet params = familyMgr.Parameters;` |
 | `family.FamilyPlacementType` | Enum declaring how instances are placed in 3D space. | `FamilyPlacementType type = family.FamilyPlacementType;` |
 | `doc.Create.NewFamilyInstance()` | Spawns a new placed `FamilyInstance` in the model. | `doc.Create.NewFamilyInstance(pt, symbol, level, StructuralType.NonStructural);` |
+
+---
+
+## 8. Per-Command Reasoning (Commands 01–12)
+
+This section explains the architectural reasoning behind each command — *why it exists*, *what concept it unlocks*, and *how it connects to the Families mental model*.
+
+---
+
+### Command 01 — AnalyzeFamilyInstanceCommand
+
+**Why this command exists**: The very first step in the Families module is learning to *navigate upward* through the Family hierarchy. A `FamilyInstance` is what you see in the 3D model. But to understand *what type it is* and *which family defines it*, you must traverse `FamilyInstance → FamilySymbol → Family`. This traversal pattern underpins almost every other command in this module.
+
+```mermaid
+flowchart TD
+    A["User selects element in Revit"] --> B["uiDoc.Selection.PickObject()"]
+    B --> C["doc.GetElement(reference)"]
+    C --> D{"element as FamilyInstance"}
+    D -- "null" --> E["Return Failed"]
+    D -- "valid" --> F["familyInstance.Symbol"]
+    F --> G["symbol.Family"]
+    G --> H["Display: Id, Name, PlacementType"]
+```
+
+**Architectural unlock**: Establishes the three-tier hierarchy: Instance → Symbol → Family. All subsequent commands depend on being able to navigate this chain.
+
+---
+
+### Command 02 — CollectFamilySymbolsCommand
+
+**Why this command exists**: Rather than starting from a specific placed instance, this command collects *all* `FamilySymbol` elements in the entire project document. This is the **document-wide inventory** approach — critical for scenarios where you need to enumerate available types before creating instances, building a type-picker UI, or auditing what is loaded in the project.
+
+```mermaid
+flowchart TD
+    A["Project Document"] --> B["new FilteredElementCollector(doc)"]
+    B --> C[".OfClass(typeof(FamilySymbol))"]
+    C --> D[".Cast<FamilySymbol>().ToList()"]
+    D --> E["List of all FamilySymbols"]
+    E --> F["For each symbol: symbol.Family.Name + symbol.Name"]
+    F --> G["Display inventory report"]
+```
+
+**Architectural unlock**: Establishes that `FamilySymbol` is a first-class element in the Revit database and can be collected independently — without starting from a placed instance.
+
+---
+
+### Command 03 — GetFamilySymbolsFromFamilyCommand
+
+**Why this command exists**: While Command 02 collects symbols project-wide, this command approaches the question from the *Family side* — given a specific `Family` element, what types does it define? The key API is `family.GetFamilySymbolIds()`. This is the canonical way to enumerate all types within a known family, rather than filtering by family name.
+
+```mermaid
+flowchart TD
+    A["Select FamilyInstance"] --> B["familyInstance.Symbol"]
+    B --> C["symbol.Family"]
+    C --> D["family.GetFamilySymbolIds()"]
+    D --> E["ISet<ElementId> of all type IDs"]
+    E --> F["doc.GetElement(id) as FamilySymbol"]
+    F --> G["Display: Name, Id, IsActive per symbol"]
+```
+
+**Architectural unlock**: Shows that `Family.GetFamilySymbolIds()` is the *authoritative* query path for type discovery within a single family. One Family → Many Symbols.
+
+---
+
+### Command 04 — FamilySymbolActivationCommand
+
+**Why this command exists**: Revit uses a **lazy activation** model — a `FamilySymbol` can be loaded into the project without being fully activated in document memory. Calling `NewFamilyInstance()` on an inactive symbol throws an `InvalidOperationException`. This command teaches the mandatory pre-flight check: inspect `IsActive` before every placement operation, and call `Activate()` + `doc.Regenerate()` inside a `Transaction` if needed.
+
+```mermaid
+flowchart TD
+    A["Select FamilyInstance"] --> B["familyInstance.Symbol"]
+    B --> C{"symbol.IsActive?"}
+    C -- "true" --> D["Already active — safe to place"]
+    C -- "false" --> E["Start Transaction"]
+    E --> F["symbol.Activate()"]
+    F --> G["doc.Regenerate()"]
+    G --> H["Transaction.Commit()"]
+    H --> D
+    D --> I["Display: wasActive / isActive comparison"]
+```
+
+**Architectural unlock**: This is the *mandatory guard pattern* before any `NewFamilyInstance()` call. Missing it causes a runtime exception that is confusing for beginners.
+
+---
+
+### Command 05 — LoadFamilyCommand
+
+**Why this command exists**: A family must be **loaded into the project document** before it can be used. This command teaches the workflow for bringing an external `.rfa` file into the project using `doc.LoadFamily()`. Crucially, this operation modifies the document (adds elements) and must therefore run inside a `Transaction`. The command uses Revit's own `FileOpenDialog` to keep the interaction native to the Revit environment.
+
+```mermaid
+flowchart TD
+    A["FileOpenDialog — Select .rfa file"] --> B{"Dialog confirmed?"}
+    B -- "Cancelled" --> C["Return Cancelled"]
+    B -- "Confirmed" --> D["Validate: File.Exists + .rfa extension"]
+    D --> E["Start Transaction"]
+    E --> F["doc.LoadFamily(path, out Family loadedFamily)"]
+    F --> G{"loaded && loadedFamily != null?"}
+    G -- "false" --> H["RollBack + Return Failed"]
+    G -- "true" --> I["Transaction.Commit()"]
+    I --> J["family.GetFamilySymbolIds() — confirm types"]
+    J --> K["Display: Family Name, Id, Symbol Count"]
+```
+
+**Architectural unlock**: Separates the concept of *loading* (bringing the family into the project database) from *activating* (preparing a symbol for placement) and *instantiating* (placing a 3D instance).
+
+---
+
+### Command 06 — EditFamilyCommand
+
+**Why this command exists**: The Project Document and the Family Document are **fundamentally different contexts**. A `Family` element in the project document is just a reference to the family definition. To inspect or modify the actual definition, you must open a separate in-memory Family Document via `doc.EditFamily(family)`. This command teaches that boundary and demonstrates `family.IsEditable` as a required pre-check (system families like Walls cannot be opened this way).
+
+```mermaid
+flowchart TD
+    A["Select FamilyInstance"] --> B["familyInstance.Symbol.Family"]
+    B --> C{"family.IsEditable?"}
+    C -- "false" --> D["Show: System families cannot be edited"]
+    C -- "true" --> E["doc.EditFamily(family)"]
+    E --> F["familyDoc — separate in-memory Document"]
+    F --> G["familyDoc.IsFamilyDocument == true"]
+    G --> H["Inspect: Title, Path, OwnerFamily"]
+    H --> I["familyDoc.Close(false) — clean up"]
+```
+
+**Architectural unlock**: Establishes the **two-document boundary**. Everything inside `FamilyManager` only exists in the Family Document context. This is the gateway for Commands 07–10.
+
+---
+
+### Command 07 — FamilyManagerInspectionCommand
+
+**Why this command exists**: Once inside the Family Document, the **gateway for all family editing** is `familyDoc.FamilyManager`. This command teaches what `FamilyManager` exposes: `CurrentType`, `Types` (collection of `FamilyType`), and `Parameters` (collection of `FamilyParameter`). Understanding this property is prerequisite to Commands 08, 09, and 10.
+
+```mermaid
+flowchart TD
+    A["Select FamilyInstance"] --> B["family.IsEditable check"]
+    B --> C["doc.EditFamily(family) → familyDoc"]
+    C --> D["familyDoc.FamilyManager"]
+    D --> E["FamilyManager.CurrentType"]
+    D --> F["FamilyManager.Types → FamilyType collection"]
+    D --> G["FamilyManager.Parameters → FamilyParameter collection"]
+    E --> H["Display: CurrentType name, total types, total params"]
+    F --> H
+    G --> H
+```
+
+**Architectural unlock**: `FamilyManager` is the *single entry point* for all type and parameter management inside a family definition. Without understanding this property, Commands 08–10 are opaque.
+
+---
+
+### Command 08 — FamilyParameterInspectionCommand
+
+**Why this command exists**: A `FamilyParameter` is not the same as a `Parameter`. A `FamilyParameter` is a *definition* object that lives inside the Family Document — it defines *which parameters the family exposes*, their scope (instance vs. type), whether they drive formulas, and whether they are shared. This command teaches the inspection of those properties, which is critical before creating or modifying parameters programmatically.
+
+```mermaid
+flowchart TD
+    A["doc.EditFamily(family) → familyDoc"] --> B["familyDoc.FamilyManager"]
+    B --> C["familyMgr.Parameters → FamilyParameterSet"]
+    C --> D["For each FamilyParameter"]
+    D --> E["Definition.Name"]
+    D --> F["IsInstance → Instance or Type scope"]
+    D --> G["IsShared → Shared Parameter?"]
+    D --> H["IsReadOnly → Formula-driven?"]
+    D --> I["Formula → Expression string"]
+    E & F & G & H & I --> J["Display parameter audit report"]
+```
+
+**Architectural unlock**: Bridges the gap between the visual parameter editor in the Revit family editor UI and the programmatic `FamilyParameter` object that represents the same data.
+
+---
+
+### Command 09 — FamilyParameterVsProjectParameterCommand
+
+**Why this command exists**: Revit has *three different parameter systems* that beginners frequently confuse. This command demonstrates all three side-by-side with real data from the open document:
+1. **Family Parameters** — defined inside `.rfa`, apply only to instances of that family.
+2. **Project Parameters** — defined in `.rvt` via `ParameterBindings`, apply to all elements of bound categories.
+3. **Shared Parameters** — external `.txt` GUIDs; can be added to either side; required for scheduling and tagging.
+
+```mermaid
+flowchart LR
+    subgraph FamilySide ["Family Document (.rfa)"]
+        FM["FamilyManager.Parameters"] --> FP["FamilyParameter"]
+        FP --> FP1["Scope: this family only"]
+    end
+
+    subgraph ProjectSide ["Project Document (.rvt)"]
+        BM["doc.ParameterBindings"] --> PP["Definition + Binding"]
+        PP --> PP1["Scope: all elements of bound categories"]
+    end
+
+    subgraph Shared ["Shared Parameters (.txt)"]
+        SP["GUID-based external file"] --> SP1["Can be added to FamilyManager"]
+        SP --> SP2["Can be added to BindingMap"]
+        SP --> SP3["Enables scheduling and tagging"]
+    end
+```
+
+**Architectural unlock**: This is the conceptual map that prevents the most common parameter confusion in Revit API development.
+
+---
+
+### Command 10 — FamilyTypeManagementCommand
+
+**Why this command exists**: Inside a Family Document, types are represented by `FamilyType` objects managed by `FamilyManager`. Inside the Project Document, the same types appear as `FamilySymbol` elements. This command demonstrates the Family Document side — iterating `FamilyManager.Types`, reading `CurrentType`, and switching `CurrentType` programmatically — teaching that the family editor's active type state is accessible through the API.
+
+```mermaid
+flowchart TD
+    A["doc.EditFamily(family) → familyDoc"] --> B["familyDoc.FamilyManager"]
+    B --> C["familyMgr.CurrentType — initial active type"]
+    B --> D["familyMgr.Types — all FamilyType objects"]
+    D --> E["Iterate: find a non-current type to switch to"]
+    E --> F["Start Transaction on familyDoc"]
+    F --> G["familyMgr.CurrentType = targetType"]
+    G --> H["Transaction.Commit()"]
+    H --> I["Report: old current vs new current"]
+```
+
+**Architectural unlock**: Demonstrates that `FamilyType` (family-side) and `FamilySymbol` (project-side) represent the same concept from different document perspectives.
+
+---
+
+### Command 11 — FamilyPlacementTypeCommand
+
+**Why this command exists**: Calling `doc.Create.NewFamilyInstance()` with the wrong overload for a given family's placement requirements throws an `InvalidOperationException`. The `family.FamilyPlacementType` enum encodes *exactly* how a family expects to be placed in 3D space. This command teaches developers to always inspect this enum before choosing a `NewFamilyInstance()` overload.
+
+```mermaid
+flowchart TD
+    A["Select FamilyInstance"] --> B["familyInstance.Symbol.Family"]
+    B --> C["family.FamilyPlacementType"]
+    C --> D{"PlacementType"}
+    D -- "OneLevelBased" --> E["Overload: NewFamilyInstance(pt, symbol, level, structType)"]
+    D -- "TwoLevelsBased" --> F["Overload: NewFamilyInstance(pt, symbol, baseLevel, structType)"]
+    D -- "WorkPlaneBased" --> G["Overload: NewFamilyInstance(reference, pt, dir, symbol)"]
+    D -- "ViewBased" --> H["Overload: NewFamilyInstance(pt, symbol, view)"]
+    D -- "CurveBased" --> I["Overload: NewFamilyInstance(curve, symbol, level, structType)"]
+```
+
+**Architectural unlock**: The `FamilyPlacementType` enum is the *decision tree* that determines which `NewFamilyInstance()` overload to use. This prevents a very common runtime error.
+
+---
+
+### Command 12 — CreateFamilyInstanceCommand
+
+**Why this command exists**: This is the **capstone command** of the Families module. It connects every preceding concept into a single end-to-end workflow: navigate to a symbol, check activation, pick an insertion point, resolve the level, and call `doc.Create.NewFamilyInstance()`. It also bridges to the ModelCreation module by using `Document.Create` — demonstrating that family placement is, at its core, a model creation operation.
+
+```mermaid
+flowchart TD
+    A["Select existing FamilyInstance"] --> B["existingInstance.Symbol"]
+    B --> C{"symbol.IsActive?"}
+    C -- "false" --> D["Activate() + Regenerate() in Transaction"]
+    C -- "true" --> E["Skip activation"]
+    D --> E
+    E --> F["uiDoc.Selection.PickPoint() — insertion XYZ"]
+    F --> G["Resolve Level: existingInstance.LevelId → fallback to first level"]
+    G --> H["Start Transaction"]
+    H --> I["doc.Create.NewFamilyInstance(pt, symbol, level, StructuralType.NonStructural)"]
+    I --> J{"newInstance != null?"}
+    J -- "null" --> K["RollBack + Return Failed"]
+    J -- "valid" --> L["Transaction.Commit()"]
+    L --> M["Display: New Instance Id, Family, Type, Level, Location"]
+```
+
+**Architectural unlock**: Demonstrates that `Document.Create.NewFamilyInstance()` is the convergence point of: *Family API* (symbol + activation) + *ModelCreation API* (point + level) + *Transaction API* (safe model modification).
