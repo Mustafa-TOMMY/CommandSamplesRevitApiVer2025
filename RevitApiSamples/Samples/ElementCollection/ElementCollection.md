@@ -16,17 +16,17 @@ Revit add-ins acquire target elements through two fundamentally different strate
 ```mermaid
 flowchart TD
     Need["Goal: Operate on Elements"] --> Strategy{"How are elements identified?"}
-    Strategy -->|"User visual pick in View"| Selection["Module 01: Selection\n(UIDocument.Selection.PickObject)"]
-    Strategy -->|"Automated database query"| Collection["Module 02: ElementCollection\n(FilteredElementCollector)"]
+    Strategy -->|"User visual pick in View"| Selection["Module 01: Selection<br/>(UIDocument.Selection.PickObject)"]
+    Strategy -->|"Automated database query"| Collection["Module 02: ElementCollection<br/>(FilteredElementCollector)"]
 ```
 
 ### The Three Golden Rules of Element Collection
 
 ```mermaid
 flowchart TD
-    Rule1["1. Filter Natively First\n(Use OfCategory, OfClass in fast C++ memory before LINQ)"]
-    Rule2["2. Distinguish Types vs. Instances\n(Use WhereElementIsNotElementType or WhereElementIsElementType)"]
-    Rule3["3. Scope the Search Area\n(Use FilteredElementCollector(doc, viewId) if view-restricted)"]
+    Rule1["1. Filter Natively First<br/>(Use OfCategory, OfClass in fast C++ memory before LINQ)"]
+    Rule2["2. Distinguish Types vs. Instances<br/>(Use WhereElementIsNotElementType or WhereElementIsElementType)"]
+    Rule3["3. Scope the Search Area<br/>(Use FilteredElementCollector(doc, viewId) if view-restricted)"]
     
     Rule1 --> Rule2 --> Rule3
 ```
@@ -346,11 +346,11 @@ The `ElementCollection` module acts as the data retrieval engine for the entire 
 
 ```mermaid
 flowchart TD
-    Selection["Module 01: Selection\n(User picks initial element / container)"] --> Collection["Module 02: ElementCollection\n(Queries related elements programmatically)"]
-    Collection --> Geometry["Module 03: Geometry\n(Extracts curves, faces, solids from collected elements)"]
-    Collection --> ModelCreation["Module 04: ModelCreation\n(Queries Level, FamilySymbol, WallType needed for spawning elements)"]
-    Collection --> Parameters["Module 05: Parameters\n(Reads / writes parameter values on collected elements)"]
-    Collection --> Views["Module 06: Views\n(Queries view-dependent elements or view templates)"]
+    Selection["Module 01: Selection<br/>(User picks initial element / container)"] --> Collection["Module 02: ElementCollection<br/>(Queries related elements programmatically)"]
+    Collection --> Geometry["Module 03: Geometry<br/>(Extracts curves, faces, solids from collected elements)"]
+    Collection --> ModelCreation["Module 04: ModelCreation<br/>(Queries Level, FamilySymbol, WallType needed for spawning elements)"]
+    Collection --> Parameters["Module 05: Parameters<br/>(Reads / writes parameter values on collected elements)"]
+    Collection --> Views["Module 07: Views<br/>(Queries view-dependent elements or view templates)"]
 ```
 
 - **Selection → ElementCollection**: Selection obtains initial user seeds (e.g., picking a single wall); `ElementCollection` uses that seed to find all connected walls or hosted doors programmatically.

@@ -1,4 +1,4 @@
-# Views Module — Revit API Educational Guide
+# Module 07 — Views
 
 Welcome to the **Views Module** educational documentation. In Autodesk Revit, the building model is stored as a single, unified database of elements in 3D space. However, human users and BIM automated workflows interact with the building through **Views**.
 

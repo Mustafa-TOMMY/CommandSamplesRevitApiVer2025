@@ -1,4 +1,4 @@
-# Module 05 — Families
+# Module 09 — Families
 
 ## 1. Families Mental Model
 
@@ -8,8 +8,8 @@ The **Family API** in Revit provides the structural hierarchy for object-oriente
 
 ```mermaid
 flowchart TD
-    Family["Family (.rfa Definition / Family Element)\n(e.g., Single-Flush Door)"] --> Symbol["FamilySymbol (Type Definition)\n(e.g., 36\" x 84\")"]
-    Symbol --> Instance["FamilyInstance (Placed 3D Object)\n(e.g., Door placed on Level 1 at X,Y,Z)"]
+    Family["Family (.rfa Definition / Family Element)<br/>(e.g., Single-Flush Door)"] --> Symbol["FamilySymbol (Type Definition)<br/>(e.g., 36\" x 84\")"]
+    Symbol --> Instance["FamilyInstance (Placed 3D Object)<br/>(e.g., Door placed on Level 1 at X,Y,Z)"]
 ```
 
 - **`Family`**: The overall component template (`.rfa` file or family definition element).

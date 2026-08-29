@@ -1,4 +1,4 @@
-# Parameters Module — Revit 2025 API Educational Guide
+# Module 05 — Parameters
 
 Welcome to the **Parameters Module** documentation for the Revit API. In Revit, Building Information Modeling (BIM) is fundamentally about the *Information* attached to 3D geometry. That information is represented, stored, validated, and queried through **Parameters**.
 
@@ -882,15 +882,15 @@ flowchart TD
     Param["Parameter Object"] --> Def["Definition.GetDataType()"]
     Def --> ForgeTypeId["ForgeTypeId (Spec)"]
     ForgeTypeId --> CheckMeasurable{"UnitUtils.IsMeasurableSpec()"}
-    CheckMeasurable -- "true" --> UnitsMod["Units Module\nUnitUtils.GetValidUnits()"]
+    CheckMeasurable -- "true" --> UnitsMod["Module 06: Units<br/>UnitUtils.GetValidUnits()"]
     
     Param --> AsDbl["Parameter.AsDouble()"]
     AsDbl --> InternalFeet["Internal Value (Feet)"]
-    InternalFeet --> Convert["UnitUtils.ConvertFromInternalUnits()\n(Units Module)"]
+    InternalFeet --> Convert["UnitUtils.ConvertFromInternalUnits()<br/>(Module 06: Units)"]
     Convert --> Metric["User Metric Value (Meters)"]
     
     Param --> AsValStr["Parameter.AsValueString()"]
-    AsValStr --> Format["Project Units & FormatOptions\n(Units Module)"]
+    AsValStr --> Format["Project Units & FormatOptions<br/>(Module 06: Units)"]
     Format --> UIStr["User Formatted String ('3000 mm')"]
 ```
 

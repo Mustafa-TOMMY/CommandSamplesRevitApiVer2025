@@ -478,12 +478,12 @@ Both Assembly and Group commands showcase a critical architectural pattern in Re
 
 ```mermaid
 flowchart TD
-    A["User Selection"] --> B["Selected Container Object\n(AssemblyInstance / Group / LinkInstance)"]
+    A["User Selection"] --> B["Selected Container Object<br/>(AssemblyInstance / Group / LinkInstance)"]
     B --> C{"Is Container Type?"}
     C -->|"No"| D["Analyze Single Element"]
-    C -->|"Yes"| E["Get Member IDs\n(GetMemberIds() / LinkedElementId)"]
-    E --> F["Retrieve Member Elements from Document\n(doc.GetElement(id))"]
-    F --> G["Loop & Analyze Individual Member Elements\n(Class, Category, Family/Type, LocationPoint/Curve)"]
+    C -->|"Yes"| E["Get Member IDs<br/>(GetMemberIds() / LinkedElementId)"]
+    E --> F["Retrieve Member Elements from Document<br/>(doc.GetElement(id))"]
+    F --> G["Loop & Analyze Individual Member Elements<br/>(Class, Category, Family/Type, LocationPoint/Curve)"]
 ```
 
 ### Why This Pattern Matters
@@ -500,12 +500,11 @@ The `Selection` module serves as the primary entry point to other core Revit API
 
 ```mermaid
 flowchart TD
-    Selection["Module 01: Selection\n(Identifies WHICH objects the user picked)"]
-    Selection -->|"Passes ElementId / Elements"| ElementCollection["Module 02: ElementCollection\n(Queries & filters element sets)"]
-    Selection -->|"Passes Reference / GeometryObject"| Geometry["Module 03: Geometry\n(Analyzes Curves, Solids, Faces, Edges)"]
-    Selection -->|"Passes FamilyInstance"| Families["Module 05: Families\n(Inspects Family, Symbol, Parameters)"]
-    Selection -->|"Passes RevitLinkInstance"| Documents["Module 07: Documents\n(Interacts with host vs linked Document)"]
-    Selection -->|"Passes Location / Points"| Transforms["Module 08: Transform\n(Handles coordinates & placement)"]
+    Selection["Module 01: Selection<br/>(Identifies WHICH objects the user picked)"]
+    Selection -->|"Passes ElementId / Elements"| ElementCollection["Module 02: ElementCollection<br/>(Queries & filters element sets)"]
+    Selection -->|"Passes Reference / GeometryObject"| Geometry["Module 03: Geometry<br/>(Analyzes Curves, Solids, Faces, Edges)"]
+    Selection -->|"Passes FamilyInstance"| Families["Module 09: Families<br/>(Inspects Family, Symbol, Parameters)"]
+    Selection -->|"Passes RevitLinkInstance"| Documents["Module 08: Documents<br/>(Interacts with host vs linked Document)"]
 ```
 
 - **Selection → ElementCollection**: Selection lets the user pick starting elements; `ElementCollection` uses `FilteredElementCollector` to search for related elements programmatically.

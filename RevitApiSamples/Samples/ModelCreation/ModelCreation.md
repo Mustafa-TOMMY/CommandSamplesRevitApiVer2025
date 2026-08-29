@@ -1,4 +1,4 @@
-# Module 3 — Model Creation
+# Module 04 — Model Creation
 
 Welcome to the **Model Creation** module documentation. This guide explains how to programmatically generate building elements in Revit using the Revit API in C#.
 
@@ -14,15 +14,15 @@ Element creation in Revit is not uniform. You cannot create a Wall, a Floor, a C
 flowchart TD
     Goal["Goal: Create a Revit Element"] --> CategoryType{"System Family or Loadable Family?"}
     
-    CategoryType -- "System Family\n(Built into Revit: Wall, Floor, Roof)" --> SystemType{"Creation Type?"}
-    CategoryType -- "Loadable Family\n(.rfa Component: Column, Door, Desk)" --> LoadableType{"Placement Paradigm?"}
+    CategoryType -- "System Family<br/>(Built into Revit: Wall, Floor, Roof)" --> SystemType{"Creation Type?"}
+    CategoryType -- "Loadable Family<br/>(.rfa Component: Column, Door, Desk)" --> LoadableType{"Placement Paradigm?"}
     
-    SystemType -- "Linear Path" --> WallCreate["Wall.Create()\nRequires: Line, WallType, Level, Height"]
-    SystemType -- "Planar Profile" --> FloorCreate["Floor.Create()\nRequires: List<CurveLoop>, FloorType, Level"]
+    SystemType -- "Linear Path" --> WallCreate["Wall.Create()<br/>Requires: Line, WallType, Level, Height"]
+    SystemType -- "Planar Profile" --> FloorCreate["Floor.Create()<br/>Requires: List<CurveLoop>, FloorType, Level"]
     
-    LoadableType -- "Point-Based\n(Free-standing)" --> PointPlacement["doc.Create.NewFamilyInstance(Point, Symbol, Level, ...)\nRequires: XYZ, FamilySymbol, Level"]
-    LoadableType -- "Face-Based\n(WorkPlane-Hosted)" --> FacePlacement["doc.Create.NewFamilyInstance(Reference, Point, Dir, Symbol)\nRequires: Reference, GlobalPoint, Normal/UV, RefDirection"]
-    LoadableType -- "Host-Based\n(Wall/Floor/Ceiling Hosted)" --> HostedPlacement["doc.Create.NewFamilyInstance(Point, Symbol, HostElement, Level, ...)\nRequires: XYZ, FamilySymbol, Host Wall, Level"]
+    LoadableType -- "Point-Based<br/>(Free-standing)" --> PointPlacement["doc.Create.NewFamilyInstance(Point, Symbol, Level, ...)<br/>Requires: XYZ, FamilySymbol, Level"]
+    LoadableType -- "Face-Based<br/>(WorkPlane-Hosted)" --> FacePlacement["doc.Create.NewFamilyInstance(Reference, Point, Dir, Symbol)<br/>Requires: Reference, GlobalPoint, Normal/UV, RefDirection"]
+    LoadableType -- "Host-Based<br/>(Wall/Floor/Ceiling Hosted)" --> HostedPlacement["doc.Create.NewFamilyInstance(Point, Symbol, HostElement, Level, ...)<br/>Requires: XYZ, FamilySymbol, Host Wall, Level"]
 ```
 
 ---
@@ -360,17 +360,17 @@ Here is how all three modules unite into a complete Revit API workflow:
 
 ```mermaid
 flowchart TD
-    subgraph Mod1["Module 1: ElementCollection"]
+    subgraph Mod1["Module 02: ElementCollection"]
         CollectWalls["Collect Host Walls / WallTypes"]
         CollectSymbols["Collect FamilySymbols"]
     end
     
-    subgraph Mod2["Module 2: Geometry"]
+    subgraph Mod2["Module 03: Geometry"]
         ExtractGeom["Extract Wall LocationCurves"]
         PickFace["Pick Face & Extract Normal / UV"]
     end
     
-    subgraph Mod3["Module 3: Model Creation"]
+    subgraph Mod3["Module 04: Model Creation"]
         Builder["CurveLoopBuilder: Build Closed Profile"]
         CreateFloor["Floor.Create(curveLoops)"]
         CreateFamily["NewFamilyInstance(faceRef, point, dir, symbol)"]

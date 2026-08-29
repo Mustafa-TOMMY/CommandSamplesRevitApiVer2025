@@ -1,4 +1,4 @@
-# Documents Module — Revit API Educational Guide
+# Module 08 — Documents
 
 Welcome to the **Documents Module** educational documentation. In Autodesk Revit, the entire Building Information Model—its geometry, parameters, types, views, links, and system settings—is housed within a **Document**.
 
@@ -604,12 +604,12 @@ Wall inside Linked Model           ──►  Linked Document (via GetLinkDocume
 
 ```mermaid
 flowchart LR
-    DocMod["Documents Module\n(Defines WHICH database context)"]
+    DocMod["Module 08: Documents<br/>(Defines WHICH database context)"]
     
-    DocMod --> EC["ElementCollection Module\n(Passes target Document to FilteredElementCollector)"]
-    DocMod --> PM["Parameters Module\n(doc.ParameterBindings vs familyDoc.FamilyManager)"]
-    DocMod --> VM["Views Module\n(doc.ActiveView & View elements belong to Document)"]
-    DocMod --> GM["Geometry Module\n(Extracts solids from elements owned by Document)"]
+    DocMod --> EC["Module 02: ElementCollection<br/>(Passes target Document to FilteredElementCollector)"]
+    DocMod --> PM["Module 05: Parameters<br/>(doc.ParameterBindings vs familyDoc.FamilyManager)"]
+    DocMod --> VM["Module 07: Views<br/>(doc.ActiveView & View elements belong to Document)"]
+    DocMod --> GM["Module 03: Geometry<br/>(Extracts solids from elements owned by Document)"]
 ```
 
 1. **[Element Collection Module](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/ElementCollection/ElementCollection.md)**:
