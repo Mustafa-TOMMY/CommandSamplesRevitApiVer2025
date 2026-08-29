@@ -1,4 +1,4 @@
-# Module 2 — Geometry
+# Module 03 — Geometry
 
 Welcome to the **Geometry** module documentation. This guide explains how to extract, navigate, and analyze 3D geometry objects in Revit using the Revit API in C#.
 
@@ -14,29 +14,29 @@ To inspect or manipulate an element's physical form, you must traverse Revit's *
 
 ```mermaid
 flowchart TD
-    Element["Revit Element\n(e.g., Wall, Column, FamilyInstance)"] -->|element.get_Geometry(options)| GeomElem["GeometryElement\n(Iterable Root Container)"]
+    Element["Revit Element<br/>(e.g., Wall, Column, FamilyInstance)"] -->|"element.get_Geometry(options)"| GeomElem["GeometryElement<br/>(Iterable Root Container)"]
     
-    GeomElem -->|foreach| GeomObj["GeometryObject\n(Base Class)"]
+    GeomElem -->|"foreach"| GeomObj["GeometryObject<br/>(Base Class)"]
     
-    GeomObj -->|is Solid| Solid["Solid\n(3D B-Rep Body)"]
-    GeomObj -->|is GeometryInstance| Inst["GeometryInstance\n(Nested Family Geometry)"]
-    GeomObj -->|is Mesh| Mesh["Mesh\n(Tessellated Triangles)"]
-    GeomObj -->|is Curve| Curve["Curve / Line / Arc\n(Parametric 3D Curve)"]
-    GeomObj -->|is Point| Point["Point\n(Single 3D Coordinate)"]
+    GeomObj -->|"is Solid"| Solid["Solid<br/>(3D B-Rep Body)"]
+    GeomObj -->|"is GeometryInstance"| Inst["GeometryInstance<br/>(Nested Family Geometry)"]
+    GeomObj -->|"is Mesh"| Mesh["Mesh<br/>(Tessellated Triangles)"]
+    GeomObj -->|"is Curve"| Curve["Curve / Line / Arc<br/>(Parametric 3D Curve)"]
+    GeomObj -->|"is Point"| Point["Point<br/>(Single 3D Coordinate)"]
     
-    Inst -->|inst.GetInstanceGeometry()| InstGeom["GeometryElement\n(Resolved World Space Geometry)"]
-    InstGeom -->|Recurse| GeomObj
+    Inst -->|"inst.GetInstanceGeometry()"| InstGeom["GeometryElement<br/>(Resolved World Space Geometry)"]
+    InstGeom -->|"Recurse"| GeomObj
     
-    Solid -->|solid.Faces| FaceArray["Faces (FaceArray)"]
-    Solid -->|solid.Edges| EdgeArray["Edges (EdgeArray)"]
+    Solid -->|"solid.Faces"| FaceArray["Faces (FaceArray)"]
+    Solid -->|"solid.Edges"| EdgeArray["Edges (EdgeArray)"]
     
-    FaceArray --> Face["Face\n(PlanarFace, CylindricalFace, etc.)"]
-    EdgeArray --> Edge["Edge\n(Topological Boundary)"]
+    FaceArray --> Face["Face<br/>(PlanarFace, CylindricalFace, etc.)"]
+    EdgeArray --> Edge["Edge<br/>(Topological Boundary)"]
     
-    Face -->|face.ComputeNormal(uv)| Normal["XYZ (Normal Vector)"]
-    Face -->|face.Project(point)| UV["UV (Parametric Coordinate)"]
+    Face -->|"face.ComputeNormal(uv)"| Normal["XYZ (Normal Vector)"]
+    Face -->|"face.Project(point)"| UV["UV (Parametric Coordinate)"]
     
-    Edge -->|edge.AsCurve()| EdgeCurve["Curve\n(Line, Arc, NurbSpline)"]
+    Edge -->|"edge.AsCurve()"| EdgeCurve["Curve<br/>(Line, Arc, NurbSpline)"]
 ```
 
 ---
@@ -106,7 +106,7 @@ Revit uses **Boundary Representation (B-Rep)** to define 3D solids:
 
 ```mermaid
 graph LR
-    Solid["Solid\n(Volume & Surface Area)"]
+    Solid["Solid<br/>(Volume & Surface Area)"]
     Solid --> Faces["Faces (FaceArray)"]
     Solid --> Edges["Edges (EdgeArray)"]
     
@@ -115,9 +115,9 @@ graph LR
     Faces --> Hermite["HermiteFace / RuledFace"]
     
     Edges --> Edge["Edge"]
-    Edge -->|AsCurve()| Line["Line"]
-    Edge -->|AsCurve()| Arc["Arc"]
-    Edge -->|AsCurve()| Spline["NurbSpline"]
+    Edge -->|"AsCurve()"| Line["Line"]
+    Edge -->|"AsCurve()"| Arc["Arc"]
+    Edge -->|"AsCurve()"| Spline["NurbSpline"]
 ```
 
 - **Solid**: A 3D closed body. Always filter solids by `solid.Volume > 0` to exclude zero-volume auxiliary/construction solids.
@@ -135,13 +135,13 @@ There are two fundamental ways to obtain geometry in Revit:
 flowchart TD
     subgraph RouteA["Route A: Element Geometry Extraction"]
         SelElem["User Selects Element"] --> Element["Element"]
-        Element -->|get_Geometry(options)| GeomElem["GeometryElement"]
-        GeomElem -->|Traverse B-Rep| SolidA["Solid / Face"]
+        Element -->|"get_Geometry(options)"| GeomElem["GeometryElement"]
+        GeomElem -->|"Traverse B-Rep"| SolidA["Solid / Face"]
     end
     
     subgraph RouteB["Route B: Interactive Face/Edge Picking"]
         PickFace["User Picks Face directly on screen"] --> Ref["Reference"]
-        Ref -->|GetGeometryObjectFromReference(ref)| FaceB["Face (Direct Reference)"]
+        Ref -->|"GetGeometryObjectFromReference(ref)"| FaceB["Face (Direct Reference)"]
     end
 ```
 
@@ -285,9 +285,9 @@ foreach (Edge edge in solid.Edges)
 
 ```mermaid
 flowchart LR
-    Selection["Selection Module\nUser picks Face / Element"] --> Geometry["Geometry Module\nExtract Solid, Face Normal, UV, Edges"]
-    ElementCollection["ElementCollection Module\nCollect Walls / Columns"] --> Geometry
-    Geometry --> Creation["ModelCreation Module\nUse Face + Normal + UV to place Face-Based Families\nUse Wall Curves to place Floors"]
+    Selection["Selection Module<br/>User picks Face / Element"] --> Geometry["Geometry Module<br/>Extract Solid, Face Normal, UV, Edges"]
+    ElementCollection["ElementCollection Module<br/>Collect Walls / Columns"] --> Geometry
+    Geometry --> Creation["ModelCreation Module<br/>Use Face + Normal + UV to place Face-Based Families<br/>Use Wall Curves to place Floors"]
 ```
 
 - **From Selection / Collection**: You pick or collect elements/references.
@@ -309,4 +309,4 @@ flowchart LR
 ## 9. Where This Leads Next
 
 Now that you understand how to navigate and extract 3D geometry:
-- Proceed to **Module 3 — Model Creation** to see how geometric curves and face normals are used to programmatically generate Walls, Floors, Columns, Face-Based Families, and Hosted Families.
+- Proceed to **Module 04 — Model Creation** to see how geometric curves and face normals are used to programmatically generate Walls, Floors, Columns, Face-Based Families, and Hosted Families.
