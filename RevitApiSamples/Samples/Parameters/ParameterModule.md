@@ -586,6 +586,13 @@ Understanding the dual-document architecture is essential for advanced Revit dev
 
 ```mermaid
 flowchart LR
+    subgraph FamilyContext["FAMILY DOCUMENT (.rfa)"]
+        Geom["Extrusions, Blends, Sweeps"]
+        RefPlanes["Reference Planes and Dimensions"]
+        FamMgr["FamilyManager"]
+        FamTypes["FamilyTypes and FamilyParameters"]
+    end
+
     subgraph ProjectContext["PROJECT DOCUMENT (.rvt)"]
         Walls["Walls, Floors, Roofs"]
         Instances["FamilyInstances"]
@@ -593,15 +600,8 @@ flowchart LR
         ProjUnits["Units / FormatOptions"]
     end
 
-    subgraph FamilyContext["FAMILY DOCUMENT (.rfa)"]
-        Geom["Extrusions, Blends, Sweeps"]
-        RefPlanes["Reference Planes & Dimensions"]
-        FamMgr["FamilyManager"]
-        FamTypes["FamilyTypes & FamilyParameters"]
-    end
-
-    Instances -->|"doc.EditFamily()"| FamilyContext
-    FamilyContext -->|"familyDoc.LoadFamily()"| ProjectContext
+    Instances -->|"doc.EditFamily()"| FamMgr
+    FamTypes -->|"familyDoc.LoadFamily()"| Instances
 ```
 
 ### Architectural Comparison
