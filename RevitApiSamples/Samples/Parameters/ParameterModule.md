@@ -600,8 +600,8 @@ flowchart LR
         FamTypes["FamilyTypes & FamilyParameters"]
     end
 
-    Instances -->|doc.EditFamily()| FamilyContext
-    FamilyContext -->|familyDoc.LoadFamily()| ProjectContext
+    Instances -->|"doc.EditFamily()"| FamilyContext
+    FamilyContext -->|"familyDoc.LoadFamily()"| ProjectContext
 ```
 
 ### Architectural Comparison
