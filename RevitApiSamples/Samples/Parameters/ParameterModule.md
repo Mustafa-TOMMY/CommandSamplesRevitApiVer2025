@@ -356,9 +356,9 @@ flowchart TD
         WallType["WallType: 'Generic - 200mm'\n(TypeId: 501)\nWidth: 200 mm\nFunction: Exterior"]
     end
 
-    WallA -->|GetTypeId()| WallType
-    WallB -->|GetTypeId()| WallType
-    WallC -->|GetTypeId()| WallType
+    WallA -->|"GetTypeId()"| WallType
+    WallB -->|"GetTypeId()"| WallType
+    WallC -->|"GetTypeId()"| WallType
 ```
 
 - **Instance Parameter**: Owned by a specific physical element. Modifying Wall A's height does **NOT** affect Wall B or Wall C.
