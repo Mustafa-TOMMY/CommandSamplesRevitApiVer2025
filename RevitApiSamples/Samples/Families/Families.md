@@ -8,7 +8,7 @@ The **Family API** in Revit provides the structural hierarchy for object-oriente
 
 ```mermaid
 flowchart TD
-    Family["Family (.rfa Definition / Family Element)<br/>(e.g., Single-Flush Door)"] --> Symbol["FamilySymbol (Type Definition)<br/>(e.g., 36\" x 84\")"]
+    Family["Family (.rfa Definition / Family Element)<br/>(e.g., Single-Flush Door)"] --> Symbol["FamilySymbol (Type Definition)<br/>(e.g., 36#quot; x 84#quot;)"]
     Symbol --> Instance["FamilyInstance (Placed 3D Object)<br/>(e.g., Door placed on Level 1 at X,Y,Z)"]
 ```
 

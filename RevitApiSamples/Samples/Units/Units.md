@@ -160,7 +160,7 @@ flowchart TD
     InternalVal["Stored Internal Value: 9.84252 ft"] --> ProjSetting{"Project Units Setting\n(doc.GetUnits())"}
     ProjSetting -- "Length = Millimeters" --> DisplayMM["UI Displays: 3000 mm"]
     ProjSetting -- "Length = Meters" --> DisplayM["UI Displays: 3.00 m"]
-    ProjSetting -- "Length = Fractional Inches" --> DisplayIn["UI Displays: 9' 10 1/8\""]
+    ProjSetting -- "Length = Fractional Inches" --> DisplayIn["UI Displays: 9' 10 1/8#quot;"]
 ```
 
 ### Inspected Objects & Code Workflow
