@@ -34,7 +34,7 @@ flowchart TD
     B1 --> G1
     B1 --> G2
     
-    G1 --> Results["ToElements() - Final Clashing Elements"]
+    G1 --> Results["ToElements() - Final Filtered Elements"]
     G2 --> Results
 ```
 
@@ -55,9 +55,85 @@ In the Revit API, every filter inherits from the abstract base class `ElementFil
 
 ---
 
-## 3. Deep Dive: 3D Geometry Intersection Filters
+## 3. Deep Dive: `LogicalAndFilter` vs. `LogicalOrFilter`
 
-Revit provides specialized native filters for geometric clash detection and spatial boundaries:
+Revit allows you to build complex Boolean query trees in unmanaged C++ memory using `LogicalAndFilter` and `LogicalOrFilter`.
+
+### Conceptual Comparison
+
+```mermaid
+flowchart TD
+    subgraph LogicalOrTree ["LogicalOrFilter (Union ∪) — Widens Scope"]
+        OR["LogicalOrFilter"]
+        F_Wall["Filter A: Walls"]
+        F_Col["Filter B: Columns"]
+        F_Wall --> OR
+        F_Col --> OR
+    end
+
+    subgraph LogicalAndTree ["LogicalAndFilter (Intersection ∩) — Narrows Scope"]
+        AND["LogicalAndFilter"]
+        F_Level["Filter C: Level 1"]
+        OR --> AND
+        F_Level --> AND
+    end
+
+    AND --> Final["Result: (Walls OR Columns) on Level 1"]
+```
+
+### Direct Feature Comparison
+
+| Feature | `LogicalAndFilter` | `LogicalOrFilter` |
+| :--- | :--- | :--- |
+| **Set Theory Operation** | **Intersection ($\cap$)** — Must satisfy all criteria | **Union ($\cup$)** — Must satisfy at least one criteria |
+| **C# Equivalent** | `conditionA && conditionB` | `conditionA \|\| conditionB` |
+| **Effect on Result Count** | **Narrows / Reduces** candidate element count | **Widens / Increases** candidate element count |
+| **Constructor Overloads** | 1. `new LogicalAndFilter(filterA, filterB)`<br/>2. `new LogicalAndFilter(IList<ElementFilter>)` | 1. `new LogicalOrFilter(filterA, filterB)`<br/>2. `new LogicalOrFilter(IList<ElementFilter>)` |
+| **Collector Chaining** | Calling `.WherePasses(F1).WherePasses(F2)` implicitly acts as an **AND** | Chaining multiple `.WherePasses()` cannot do OR; you **must** use `LogicalOrFilter` |
+| **Primary Use Case** | Combining different criteria types (e.g., `Category == Wall` **AND** `Length >= 10ft`) | Grouping multiple alternatives (e.g., `Category == Ducts` **OR** `Category == Pipes`) |
+
+---
+
+## 4. Master Comparison Matrix: Similar Functions & When to Use Which
+
+To help you decide which filter or query API to choose in different scenarios:
+
+### 1. Category Filtering Approaches
+
+| Method | API Class | Performance | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Single Category** | `.OfCategory(BuiltInCategory)` | ⚡ Ultra Fast | When you only need elements of one category. |
+| **Multiple Categories (Native)** | `new ElementMulticategoryFilter(categoriesList)` | ⚡ Ultra Fast | **Recommended:** When querying multiple categories in one single database scan. |
+| **Multiple Categories (Composite)** | `new LogicalOrFilter(categoryFilterList)` | ⚡ Fast | Functional equivalent to `ElementMulticategoryFilter`, but slightly more verbose to construct. |
+| **LINQ Merge (Anti-Pattern)** | Multiple collectors merged with `.Union()` in C# | 🐢 Slow | Avoid: Loads all objects across multiple passes into .NET memory. |
+
+---
+
+### 2. Spatial & Collision Checking Approaches
+
+| Approach | Main API | Precision | Performance | Best Use Case |
+| :--- | :--- | :--- | :--- | :--- |
+| **Bounding Box Overlap** | `BoundingBoxIntersectsFilter` | 🔲 Coarse (AABB box) | ⚡ Fast (Quick) | Pre-filtering candidate clash sets before 3D solid checks. |
+| **Strict Bounding Box Containment** | `BoundingBoxIsInsideFilter` | 🔲 Coarse (AABB box) | ⚡ Fast (Quick) | Checking if an element is completely inside a rectangular room/zone. |
+| **Point in Bounding Box** | `BoundingBoxContainsPointFilter` | 📍 Point vs. Box | ⚡ Fast (Quick) | Finding elements whose bounding box encompasses a given 3D coordinate. |
+| **Host Element 3D Collision** | `ElementIntersectsElementFilter` | 🧊 Exact (3D Solid) | 🐢 Heavy (Slow) | True physical clash check against a live element in the host model. |
+| **Custom Solid / Clearance** | `ElementIntersectsSolidFilter` | 🧊 Exact (3D Solid) | 🐢 Heavy (Slow) | Clearance buffers (+50mm offset envelope) or non-standard 3D volumes. |
+| **Linked Model Collision** | `ElementIntersectsSolidFilter` + `SolidUtils.CreateTransformed` | 🧊 Exact (3D Solid) | 🐢 Heavy (Slow) | Checking clashes between host elements and linked model elements across coordinate spaces. |
+
+---
+
+### 3. Database Parameter Filtering vs. C# LINQ
+
+| Aspect | `ElementParameterFilter` (Native) | C# LINQ `.Where(e => ...)` (Managed) |
+| :--- | :--- | :--- |
+| **Execution Layer** | Native unmanaged C++ Revit core | Managed .NET CLR runtime |
+| **Memory Allocation** | Zero .NET object allocations for non-matching elements | Creates a managed `Element` proxy for **every** element in the database |
+| **Speed on Large Models** | Up to **10x – 50x faster** | Noticeable UI lag / high garbage collection overhead |
+| **Verdict** | Always use for initial database querying | Use only for complex business logic after native filtering |
+
+---
+
+## 5. Deep Dive: 3D Geometry Intersection Filters
 
 ```mermaid
 classDiagram
@@ -103,7 +179,28 @@ classDiagram
 
 ---
 
-## 4. Learning Progression (Commands 01–08)
+## 6. Architectural Guide: Cross-Model Clash Detection
+
+In multi-discipline BIM environments, elements to be checked often reside in **Revit Links** (e.g., Structural Model linked into MEP Model).
+
+### The Coordinate Challenge:
+`ElementIntersectsElementFilter` cannot directly query across different documents because each linked model has its own local coordinate system and `Document` instance.
+
+### The Standard Solution Workflow:
+
+```mermaid
+flowchart TD
+    A["1. Pick Element in Linked Model<br/>(ObjectType.LinkedElement)"] --> B["2. Retrieve RevitLinkInstance<br/>and Link Document"]
+    B --> C["3. Extract 3D Solid from Linked Element<br/>(element.get_Geometry)"]
+    C --> D["4. Transform Solid into Host World Coordinates<br/>SolidUtils.CreateTransformed(solid, linkTransform)"]
+    D --> E["5. Create ElementIntersectsSolidFilter(transformedSolid)"]
+    E --> F["6. Execute Collector on Host Document<br/>FilteredElementCollector(hostDoc)"]
+    F --> G["7. Retrieve Host Elements Intersecting Linked Geometry"]
+```
+
+---
+
+## 7. Learning Progression (Commands 01–08)
 
 | # | Command File | Class Name | Main API | What It Teaches |
 | :--- | :--- | :--- | :--- | :--- |
@@ -118,34 +215,9 @@ classDiagram
 
 ---
 
-## 5. Architectural Guide: Cross-Model Clash Detection
-
-In multi-discipline BIM environments, elements to be checked often reside in **Revit Links** (e.g., Structural Model linked into MEP Model).
-
-### The Coordinate Challenge:
-`ElementIntersectsElementFilter` cannot directly query across different documents because each linked model has its own local coordinate system and `Document` instance.
-
-### The Standard Solution Workflow:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant Link as RevitLinkInstance
-    participant Solid as Solid Geometry
-    participant HostCollector as FilteredElementCollector
-
-    User->>Link: Pick element in Link (LinkedElementId)
-    Link->>Solid: Extract raw 3D Solid from linked element
-    Link->>Solid: SolidUtils.CreateTransformed(solid, linkTransform)
-    Solid->>HostCollector: Pass transformed Solid to ElementIntersectsSolidFilter
-    HostCollector-->>User: Return host elements clashing with linked solid
-```
-
----
-
-## 6. Summary of Best Practices
+## 8. Summary of Best Practices & Common Pitfalls
 
 1. **Avoid LINQ for Base Filtering:** Always prefer `ElementParameterFilter` or `ParameterFilterRuleFactory` over `.Where(x => x.LookupParameter(...))` whenever possible.
-2. **Exclude Self:** When checking clashes against a target element, always pass an `ExclusionFilter([target.Id])` to prevent the element from reporting a collision with itself.
+2. **Exclude Self in Collision Checks:** When checking clashes against a target element, always pass an `ExclusionFilter([target.Id])` to prevent the element from reporting a collision with itself.
 3. **Bounding Box Pre-Pass:** Before applying `ElementIntersectsElementFilter` or `ElementIntersectsSolidFilter`, always apply a `BoundingBoxIntersectsFilter` with the target's bounding box `Outline` to discard non-proximate elements instantly.
+4. **Always Transform Linked Solids:** Never pass a raw solid extracted from a linked model directly to `ElementIntersectsSolidFilter` without transforming it with `linkInstance.GetTotalTransform()`.
