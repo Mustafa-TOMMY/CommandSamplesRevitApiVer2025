@@ -257,6 +257,40 @@ flowchart TD
 
 ---
 
+### The 3 Parts of a Parameter Filter Rule
+
+When you build an `ElementParameterFilter`, you don't just check if a parameter exists; you evaluate whether its **value satisfies a specific rule**:
+
+```mermaid
+flowchart LR
+    A["1. Parameter ID<br/>(Which column?)<br/>e.g. CURVE_ELEM_LENGTH"] 
+    --> B["2. Operator / Evaluator<br/>(What check?)<br/>e.g. GreaterOrEqual"]
+    --> C["3. Target Value<br/>(Compared to what?)<br/>e.g. 10.0 ft"]
+    --> D["FilterRule"]
+    --> E["ElementParameterFilter"]
+```
+
+---
+
+### Examples of What `ElementParameterFilter` Evaluates
+
+| Target Query Goal | `ParameterFilterRuleFactory` Method Call |
+| :--- | :--- |
+| **Walls longer than 10 ft** | `ParameterFilterRuleFactory.CreateGreaterOrEqualRule(lengthParamId, 10.0, 0.001)` |
+| **Doors whose Mark begins with 'D'** | `ParameterFilterRuleFactory.CreateBeginsWithRule(markParamId, "D", caseSensitive: false)` |
+| **Pipes whose Comments contain 'Chilled'** | `ParameterFilterRuleFactory.CreateContainsRule(commentsParamId, "Chilled", caseSensitive: false)` |
+| **Elements with non-empty Comments** | `ParameterFilterRuleFactory.CreateEqualsRule(commentsParamId, string.Empty, false)` with `inverted: true` |
+
+---
+
+### What happens if an element does NOT have that parameter?
+
+If Revit encounters an element that does not have the queried parameter at all (for example, evaluating a Wall Length rule on a generic Model Line or Detail Component):
+* Revit evaluates the rule as **`False`**.
+* The element is automatically **skipped and excluded** from the collector results without throwing an exception.
+
+---
+
 ## 8. Deep Dive: 3D Geometry Intersection Filters
 
 ```mermaid
