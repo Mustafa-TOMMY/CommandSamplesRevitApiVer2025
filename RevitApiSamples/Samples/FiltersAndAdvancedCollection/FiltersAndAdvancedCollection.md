@@ -6,36 +6,36 @@ While **Module 02 (ElementCollection)** introduces basic collection queries (`Of
 
 ```mermaid
 flowchart TD
-    subgraph Revit Database Engine (Unmanaged C++)
-        Collector["new FilteredElementCollector(doc)"]
-        
-        subgraph Stage 1: Quick Filters (Microseconds)
-            Q1["ElementCategoryFilter / OfCategory()"]
-            Q2["ElementClassFilter / OfClass()"]
-            Q3["BoundingBoxIntersectsFilter / Outline"]
-            Q4["ExclusionFilter(excludedIds)"]
-        end
-        
-        subgraph Stage 2: Logical Combination
-            L1["LogicalAndFilter(F1, F2)"]
-            L2["LogicalOrFilter(F1, F2)"]
-        end
-        
-        subgraph Stage 3: Slow & 3D Geometry Filters
-            S1["ElementParameterFilter (Rule-based)"]
-            S2["ElementIntersectsElementFilter (3D Clash)"]
-            S3["ElementIntersectsSolidFilter (3D Volume/Clearance)"]
-        end
-        
-        Collector --> Stage 1
-        Stage 1 --> Stage 2
-        Stage 2 --> Stage 3
-    end
+    Collector["new FilteredElementCollector(doc)"]
     
-    subgraph Managed .NET Memory (C# CLR)
-        Stage 3 --> Results["IList&lt;Element&gt; ToElements()"]
-        Results --> LINQ["C# LINQ Operations (.Where, .GroupBy)"]
+    subgraph FastFilters ["1. Fast Native Pre-Filtering (Quick Filters)"]
+        F1["Category & Class Filters"]
+        F2["BoundingBoxIntersectsFilter (Outline)"]
+        F3["ExclusionFilter (Exclude Self / Selected)"]
     end
+
+    subgraph BooleanLogic ["2. Logical Composition"]
+        B1["LogicalAndFilter / LogicalOrFilter"]
+    end
+
+    subgraph Geometry3D ["3. Exact 3D Collision (Slow Filters)"]
+        G1["ElementIntersectsElementFilter (Host Clash)"]
+        G2["ElementIntersectsSolidFilter (Clearance / Link)"]
+    end
+
+    Collector --> F1
+    Collector --> F2
+    Collector --> F3
+    
+    F1 --> B1
+    F2 --> B1
+    F3 --> B1
+    
+    B1 --> G1
+    B1 --> G2
+    
+    G1 --> Results["ToElements() - Final Clashing Elements"]
+    G2 --> Results
 ```
 
 ---
@@ -133,13 +133,13 @@ sequenceDiagram
     actor User
     participant Link as RevitLinkInstance
     participant Solid as Solid Geometry
-    participant HostCollector as FilteredElementCollector (Host Doc)
-    
+    participant HostCollector as FilteredElementCollector
+
     User->>Link: Pick element in Link (LinkedElementId)
-    Link->>Solid: Extract 3D Solid (fine detail)
-    Link->>Solid: SolidUtils.CreateTransformed(solid, link.GetTotalTransform())
+    Link->>Solid: Extract raw 3D Solid from linked element
+    Link->>Solid: SolidUtils.CreateTransformed(solid, linkTransform)
     Solid->>HostCollector: Pass transformed Solid to ElementIntersectsSolidFilter
-    HostCollector-->>User: Returns all Host Elements intersecting the Linked Solid!
+    HostCollector-->>User: Return host elements clashing with linked solid
 ```
 
 ---
