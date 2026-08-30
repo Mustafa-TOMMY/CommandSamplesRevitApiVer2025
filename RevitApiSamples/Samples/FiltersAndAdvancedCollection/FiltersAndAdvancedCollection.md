@@ -301,7 +301,208 @@ flowchart TD
 
 ---
 
-## 10. Summary of Best Practices & Common Pitfalls
+## 10. Command Deep Dives & Code Recipes
+
+### 🔹 Command 01: `LogicalFiltersCommand`
+Demonstrates composing boolean filter trees combining Category filters with an `ElementLevelFilter`.
+
+```csharp
+// 1. Create Category Filters
+ElementCategoryFilter colFilter = new ElementCategoryFilter(BuiltInCategory.OST_Columns);
+ElementCategoryFilter structColFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralColumns);
+ElementCategoryFilter framingFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralFraming);
+
+// 2. Combine with LogicalOrFilter (Columns OR Framing)
+LogicalOrFilter structuralElementsFilter = new LogicalOrFilter(new List<ElementFilter> 
+{ 
+    colFilter, 
+    structColFilter, 
+    framingFilter 
+});
+
+// 3. Create Level Filter
+ElementLevelFilter levelFilter = new ElementLevelFilter(targetLevel.Id);
+
+// 4. Combine with LogicalAndFilter: (Columns OR Framing) AND (On Level 1)
+LogicalAndFilter combinedFilter = new LogicalAndFilter(structuralElementsFilter, levelFilter);
+
+// 5. Query Native Collector
+IList<Element> results = new FilteredElementCollector(doc)
+    .WherePasses(combinedFilter)
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+### 🔹 Command 02: `ParameterRuleFilterCommand`
+Demonstrates native database parameter rules (numeric, string, and inverted) using `ParameterFilterRuleFactory`.
+
+```csharp
+// 1. Numeric Rule: Walls with Length >= 10.0 ft
+ElementId lengthParamId = new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH);
+FilterRule lengthRule = ParameterFilterRuleFactory.CreateGreaterOrEqualRule(lengthParamId, 10.0, 0.001);
+ElementParameterFilter wallLengthFilter = new ElementParameterFilter(lengthRule);
+
+// 2. String Rule: Doors with Mark beginning with "D"
+ElementId markParamId = new ElementId(BuiltInParameter.DOOR_NUMBER);
+FilterRule markRule = ParameterFilterRuleFactory.CreateBeginsWithRule(markParamId, "D", caseSensitive: false);
+ElementParameterFilter doorMarkFilter = new ElementParameterFilter(markRule);
+
+// 3. Inverted Rule: Elements where Comments is NOT empty ("")
+ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+FilterRule emptyRule = ParameterFilterRuleFactory.CreateEqualsRule(commentsParamId, string.Empty, false);
+ElementParameterFilter hasCommentsFilter = new ElementParameterFilter(emptyRule, inverted: true);
+```
+
+---
+
+### 🔹 Command 03: `MultiCategoryFilterCommand`
+Queries multiple MEP distribution categories simultaneously in one native database pass.
+
+```csharp
+// Define multi-category collection
+ICollection<BuiltInCategory> mepCategories = new List<BuiltInCategory>
+{
+    BuiltInCategory.OST_DuctCurves,
+    BuiltInCategory.OST_PipeCurves,
+    BuiltInCategory.OST_CableTray,
+    BuiltInCategory.OST_Conduit
+};
+
+ElementMulticategoryFilter multiCatFilter = new ElementMulticategoryFilter(mepCategories);
+
+IList<Element> mepElements = new FilteredElementCollector(doc)
+    .WherePasses(multiCatFilter)
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+### 🔹 Command 04: `ExclusionFilterCommand`
+Natively skips selected or already processed elements during the database scan.
+
+```csharp
+ICollection<ElementId> selectedIds = uiDoc.Selection.GetElementIds();
+
+// Apply ExclusionFilter directly inside WherePasses
+ExclusionFilter exclusionFilter = new ExclusionFilter(selectedIds);
+
+IList<Element> remainingWalls = new FilteredElementCollector(doc)
+    .OfCategory(BuiltInCategory.OST_Walls)
+    .WhereElementIsNotElementType()
+    .WherePasses(exclusionFilter)
+    .ToElements();
+```
+
+---
+
+### 🔹 Command 05: `BoundingBoxSpatialFilterCommand`
+Demonstrates fast Axis-Aligned Bounding Box (AABB) spatial queries for pre-filtering candidate elements.
+
+```csharp
+// 1. Define 3D Search Outline (+2.0 ft expansion)
+XYZ min = new XYZ(bbox.Min.X - 2.0, bbox.Min.Y - 2.0, bbox.Min.Z - 2.0);
+XYZ max = new XYZ(bbox.Max.X + 2.0, bbox.Max.Y + 2.0, bbox.Max.Z + 2.0);
+Outline searchOutline = new Outline(min, max);
+
+// 2. BoundingBoxIntersectsFilter (Touches / Overlaps region)
+BoundingBoxIntersectsFilter intersectsFilter = new BoundingBoxIntersectsFilter(searchOutline);
+
+// 3. BoundingBoxIsInsideFilter (Strictly contained inside region)
+BoundingBoxIsInsideFilter insideFilter = new BoundingBoxIsInsideFilter(searchOutline);
+
+// 4. BoundingBoxContainsPointFilter (Contains specific 3D coordinate)
+XYZ centerPoint = (bbox.Min + bbox.Max) * 0.5;
+BoundingBoxContainsPointFilter containsPointFilter = new BoundingBoxContainsPointFilter(centerPoint);
+```
+
+---
+
+### 🔹 Command 06: `ElementIntersectsElementCommand`
+True 3D solid collision detection chaining Quick Bounding Box pre-filtering with Self Exclusion and 3D Solid slow filtering.
+
+```csharp
+// Step 1: Quick Bounding Box Pre-Filter (AABB)
+Outline outline = new Outline(targetBbox.Min, targetBbox.Max);
+BoundingBoxIntersectsFilter bboxFilter = new BoundingBoxIntersectsFilter(outline);
+
+// Step 2: Exclude target element itself (prevent self-clash)
+ExclusionFilter selfExclusion = new ExclusionFilter(new List<ElementId> { targetElement.Id });
+
+// Step 3: Exact 3D Solid Geometry Collision Filter
+ElementIntersectsElementFilter solidCollisionFilter = new ElementIntersectsElementFilter(targetElement);
+
+// Chaining: Quick -> Exclusion -> Slow 3D Solid
+IList<Element> clashingElements = new FilteredElementCollector(doc)
+    .WherePasses(bboxFilter)            // 1. Quick AABB filter
+    .WherePasses(selfExclusion)         // 2. Exclude self
+    .WherePasses(solidCollisionFilter)  // 3. Precise 3D boolean check
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+### 🔹 Command 07: `ElementIntersectsSolidCommand`
+Generates an in-memory extruded clearance volume (+50mm offset buffer) and queries elements penetrating the envelope.
+
+```csharp
+// 1. Build profile CurveLoop from expanded bounding coordinates
+CurveLoop profile = new CurveLoop();
+profile.Append(Line.CreateBound(p0, p1));
+profile.Append(Line.CreateBound(p1, p2));
+profile.Append(Line.CreateBound(p2, p3));
+profile.Append(Line.CreateBound(p3, p0));
+
+// 2. Create in-memory clearance Solid
+Solid clearanceSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
+    new List<CurveLoop> { profile },
+    XYZ.BasisZ,
+    height);
+
+// 3. Query elements penetrating this 3D clearance solid
+ElementIntersectsSolidFilter solidFilter = new ElementIntersectsSolidFilter(clearanceSolid);
+
+IList<Element> clearanceViolations = new FilteredElementCollector(doc)
+    .WherePasses(new ExclusionFilter(new List<ElementId> { hostElement.Id }))
+    .WherePasses(solidFilter)
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+### 🔹 Command 08: `LinkedModelIntersectionCommand`
+Cross-document clash detection between host document elements and linked model elements.
+
+```csharp
+// 1. Pick element from Linked Model
+Reference linkedRef = uiDoc.Selection.PickObject(ObjectType.LinkedElement);
+RevitLinkInstance linkInstance = hostDoc.GetElement(linkedRef) as RevitLinkInstance;
+Document linkDoc = linkInstance.GetLinkDocument();
+Element linkedElement = linkDoc.GetElement(linkedRef.LinkedElementId);
+
+// 2. Extract 3D Solid from linked element
+Solid linkedSolid = ExtractSolid(linkedElement);
+
+// 3. Transform Solid to Host World Coordinates
+Autodesk.Revit.DB.Transform linkTransform = linkInstance.GetTotalTransform();
+Solid transformedSolid = SolidUtils.CreateTransformed(linkedSolid, linkTransform);
+
+// 4. Query Host Document elements clashing with the transformed solid
+ElementIntersectsSolidFilter linkSolidFilter = new ElementIntersectsSolidFilter(transformedSolid);
+
+IList<Element> hostClashes = new FilteredElementCollector(hostDoc)
+    .WherePasses(linkSolidFilter)
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+## 11. Summary of Best Practices & Common Pitfalls
 
 1. **Avoid LINQ for Base Filtering:** Always prefer `ElementParameterFilter` or `ParameterFilterRuleFactory` over `.Where(x => x.LookupParameter(...))` whenever possible.
 2. **Exclude Self in Collision Checks:** When checking clashes against a target element, always pass an `ExclusionFilter([target.Id])` to prevent the element from reporting a collision with itself.
