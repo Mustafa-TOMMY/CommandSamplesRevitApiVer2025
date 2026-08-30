@@ -99,6 +99,12 @@ namespace RevitApiSamples.Samples.Transform.Commands
                 XYZ midPoint     = curve.Evaluate(0.50, true);
                 XYZ threeQuarterPoint = curve.Evaluate(0.75, true);
 
+                // Raw parameters vs. Normalized parameters
+                double rawStartParam = curve.GetEndParameter(0);
+                double rawEndParam   = curve.GetEndParameter(1);
+                double rawMidParam   = (rawStartParam + rawEndParam) / 2.0;
+                XYZ midPointRaw      = curve.Evaluate(rawMidParam, false);
+
                 //=====================================================
                 // 5. Compute Direction and Length
 
@@ -134,13 +140,15 @@ namespace RevitApiSamples.Samples.Transform.Commands
                 sb.AppendLine($"Element      : {element.Name}  (ID: {element.Id})");
                 sb.AppendLine($"Curve Type   : {curve.GetType().Name}");
                 sb.AppendLine($"Length       : {length:F4} ft  ({length * 0.3048:F3} m)");
+                sb.AppendLine($"Raw Param Domain : [{rawStartParam:F3}, {rawEndParam:F3}]");
                 sb.AppendLine();
 
                 sb.AppendLine("POINTS ALONG CURVE  [curve.Evaluate(t, normalized: true)]");
                 sb.AppendLine("========================================");
                 sb.AppendLine($"t = 0.00  Start           : {XYZToString(startPoint)}");
                 sb.AppendLine($"t = 0.25  Quarter Point   : {XYZToString(quarterPoint)}");
-                sb.AppendLine($"t = 0.50  Midpoint        : {XYZToString(midPoint)}");
+                sb.AppendLine($"t = 0.50  Midpoint (true) : {XYZToString(midPoint)}");
+                sb.AppendLine($"raw = {rawMidParam:F2} Mid (false): {XYZToString(midPointRaw)}");
                 sb.AppendLine($"t = 0.75  Three-Quarters  : {XYZToString(threeQuarterPoint)}");
                 sb.AppendLine($"t = 1.00  End             : {XYZToString(endPoint)}");
                 sb.AppendLine();
