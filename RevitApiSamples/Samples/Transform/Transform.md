@@ -2,7 +2,7 @@
 
 ## 1. Transform Mental Model
 
-A Transform in Revit is a mathematical object that encodes three properties in one: Translation (where is the element's origin in world space), Rotation (how is the element's local coordinate system oriented), and Scale. It is represented as a 4×4 matrix. The Revit API exposes this as the `Transform` class in `Autodesk.Revit.DB`.
+A Transform in Revit is a mathematical object that encodes three properties in one: Translation (where is the element's origin in world space), Rotation (how is the element's local coordinate system oriented), and Scale. It is represented as a 4×4 matrix. The Revit API exposes this as the `Autodesk.Revit.DB.Transform` class in `Autodesk.Revit.DB`.
 
 ```mermaid
 graph TD
@@ -12,13 +12,15 @@ graph TD
     T --> S["Scale"]
 ```
 
-## 2. Location vs Transform
+---
+
+## 2. Location vs. Transform
 
 | Feature | Location (Point/Curve) | Transform |
 | :--- | :--- | :--- |
-| **Availability** | All elements | `FamilyInstance` (via `GetTransform()`) |
-| **Data Provided** | XYZ point or Curve | Full 4x4 matrix |
-| **Use Case** | Simple positioning | Coordinate system conversions, exact rotation/scale |
+| **Availability** | All elements | `FamilyInstance` (via `GetTransform()`), `RevitLinkInstance`, `GeometryInstance` |
+| **Data Provided** | XYZ point or Curve | Full 4x4 matrix (Origin, BasisX, BasisY, BasisZ) |
+| **Use Case** | Simple positioning | Coordinate system conversions, 3D tilt/slope, exact rotation |
 
 ```mermaid
 flowchart LR
@@ -28,9 +30,11 @@ flowchart LR
     L --> LC["LocationCurve"]
     
     FI["FamilyInstance"]
-    FI --> T["GetTransform()"]
+    FI --> T["GetTransform() / GetTotalTransform()"]
     T --> TM["Transform Matrix"]
 ```
+
+---
 
 ## 3. ElementTransformUtils — The Movement API
 
@@ -44,7 +48,9 @@ flowchart LR
 | `MirrorElement` | Mirrors an element in-place across a plane. |
 | `MirrorElements` | Copies and mirrors elements across a plane. |
 
-## 4. Learning Progression (Commands 01–09)
+---
+
+## 4. Learning Progression (Commands 01–10)
 
 | # | Command File | Class Name | Main API | What It Teaches |
 | :--- | :--- | :--- | :--- | :--- |
@@ -57,8 +63,99 @@ flowchart LR
 | 07 | [GetPointOnCurveCommand.cs](Commands/GetPointOnCurveCommand.cs) | `GetPointOnCurveCommand` | `curve.Evaluate(t, normalized)`, `GetEndPoint()` | Getting any point along a CurveBased element's curve. |
 | 08 | [PointFamilyStartEndCommand.cs](Commands/PointFamilyStartEndCommand.cs) | `PointFamilyStartEndCommand` | `LocationPoint` + `GetTransform().BasisZ` + Length | Deriving Start, End, and 3D direction from a PointBased family. |
 | 09 | [DivideCurveByDistanceCommand.cs](Commands/DivideCurveByDistanceCommand.cs) | `DivideCurveByDistanceCommand` | `curve.Evaluate(d/L, true)`, `ComputeDerivatives()` | Sampling points along a curve at custom fixed distance intervals (e.g., every 3 ft on a 12 ft curve). |
+| 10 | [GetLocationPointEndPointCommand.cs](Commands/GetLocationPointEndPointCommand.cs) | `GetLocationPointEndPointCommand` | `HandOrientation`, `Transform.OfPoint`, `ConnectorManager`, `Z-Elevation` | Deriving true 3D End Point, 3D Direction, Infeed/Outfeed elevations, and slope from LocationPoint families. |
 
-## 5. Key Workflows & API Patterns
+---
+
+## 5. Deep Dive: Calculating End Point & 3D Direction from `LocationPoint` Families
+
+### The Core Problem
+When an element uses a **`LocationPoint`** (a single insertion coordinate `XYZ`), Revit does **NOT** expose a built-in `.EndPoint` property. If the element represents directional machinery, equipment, conveyors, or cantilever components, how do we compute its **true 3D End Point (Outfeed)**, **3D Direction Vector**, and **Z-Elevation Slope**?
+
+---
+
+### The 5 Methods Ranked (Generic-First)
+
+```mermaid
+flowchart TD
+    Target["Target LocationPoint FamilyInstance"] --> M1["1. Generic Vector Ray Projection<br/>EndPoint = Start + (HandOrientation * Length)"]
+    Target --> M2["2. 3D Transform Matrix Transformation<br/>EndPoint = Transform.OfPoint(localEndPoint)"]
+    Target --> M3["3. 3D Solid Geometry Vertex Projection<br/>Max Dot Product (V · HandOrientation)"]
+    Target --> M4["4. Domain-Specific MEP Connectors<br/>Connector.Origin (Inflow / Outflow Ports)"]
+    Target --> M5["5. 2D Polar Trigonometry Fallback<br/>XYZ(cos θ, sin θ, 0) — Flat Planar Only"]
+```
+
+#### 🥇 Rank 1: Vector Ray Projection (`Start + HandOrientation * Length`) — *Most Universal for ALL Families*
+* **Applies to:** **ALL Loadable Families** (Architectural, Structural, MEP, Furniture, Generic Models).
+* **Concept:** `familyInstance.HandOrientation` and `FacingOrientation` are true 3D unit vectors in world space.
+* **Formulas:**
+  * If insertion point is at **Start (Infeed)**:
+    $$P_{\text{end}} = P_{\text{start}} + (\text{HandOrientation} \times L)$$
+  * If insertion point is **Centered**:
+    $$P_{\text{end}} = P_{\text{center}} + \left(\text{HandOrientation} \times \frac{L}{2}\right)$$
+    $$P_{\text{start}} = P_{\text{center}} - \left(\text{HandOrientation} \times \frac{L}{2}\right)$$
+
+#### 🥈 Rank 2: 3D Transform Matrix (`Transform.OfPoint`) — *Universal Matrix Transformation*
+* **Applies to:** **ALL Loadable Families**.
+* **Concept:** Converts a local coordinate defined in Family Editor space $(L, 0, 0)$ into project world space:
+  $$P_{\text{world}} = \text{Transform}_{\text{total}} \times P_{\text{local}}$$
+* **Code:**
+  ```csharp
+  XYZ localEndPoint = new XYZ(length, 0, 0);
+  XYZ worldEndPoint = familyInstance.GetTotalTransform().OfPoint(localEndPoint);
+  ```
+
+#### 🥉 Rank 3: 3D Solid Geometry Vertex Projection — *Universal Geometric Inspection*
+* **Applies to:** **ALL 3D Solid Geometry** (parameter-independent).
+* **Concept:** Traverses `GeometryInstance.GetInstanceGeometry()` and finds the vertex maximizing $(V - P_{\text{start}}) \cdot \vec{u}$.
+
+#### 4️⃣ Rank 4: MEP Connectors (`ConnectorManager`) — *Domain-Specific for MEP*
+* **Applies to:** **MEP Families ONLY** (`MEPModel != null`).
+* **Concept:** Reads physical connection ports (`connector.Origin` and flow direction `connector.CoordinateSystem.BasisZ`).
+
+#### 5️⃣ Rank 5: 2D Polar Trigonometry (`LocationPoint.Rotation`) — *Fallback (2D Flat Plane Only)*
+* **Concept:** $\vec{u} = (\cos\theta, \sin\theta, 0)$.
+* **Limitation:** Hardcodes $Z=0$. Fails completely on 3D slopes, tilted conveyors, or slanted work planes.
+
+---
+
+### Infeed vs. Outfeed Z-Level & Slope Analysis Relative to $(0,0,0)$
+
+Every point in Revit has an absolute elevation $Z$ measured in internal feet relative to the **Revit Internal Origin $(0,0,0)$**:
+
+```
+                     Outfeed P2 (X2, Y2, Z2)
+                             ▲
+                            /|
+                           / |
+              3D Vector   /  |  ΔZ (Height Difference) = Z2 - Z1
+                         /   |
+                        /    |
+                       /     ▼
+ Infeed P1 (X1, Y1, Z1) ───────
+                       Horizontal Run
+```
+
+1. **Absolute Infeed Elevation:** $Z_1 = P_{\text{infeed}}.Z$
+2. **Absolute Outfeed Elevation:** $Z_2 = P_{\text{outfeed}}.Z$
+3. **Vertical Rise / Fall:** $\Delta Z = Z_2 - Z_1$
+4. **Horizontal Planar Run:** $\text{Run} = \sqrt{(X_2 - X_1)^2 + (Y_2 - Y_1)^2}$
+5. **Slope Percentage:** $\text{Slope} = \left(\frac{\Delta Z}{\text{Run}}\right) \times 100\%$
+
+---
+
+### System Families vs. Loadable Families in Location Calculations
+
+| Aspect | System Families (Walls, Floors, Beams, Pipes, Ducts) | Loadable Families (Doors, Columns, Machinery, Equipment) |
+| :--- | :--- | :--- |
+| **Location Type** | Predominantly `LocationCurve` (Linear elements). | Predominantly `LocationPoint` (Punctual insertion point). |
+| **Start / End Point Access** | Direct API: `Curve.GetEndPoint(0)` and `Curve.GetEndPoint(1)`. | Derived via `HandOrientation * Length` or `Transform.OfPoint()`. |
+| **3D Direction Vector** | `(endPoint - startPoint).Normalize()` or `Line.Direction`. | `familyInstance.HandOrientation`, `FacingOrientation`, or `Transform.BasisZ`. |
+| **3D Transform Matrix** | ❌ Not exposed directly (always in project world coordinates). | ✔ Exposes `GetTransform()` and `GetTotalTransform()`. |
+
+---
+
+## 6. Key Workflows & API Patterns
 
 ### 1. Move Element Pattern
 ```csharp
@@ -105,345 +202,128 @@ using (Transaction t = new Transaction(doc, "Mirror"))
 }
 ```
 
-### 5. Get Point on Curve Pattern
-```csharp
-LocationCurve locCurve = element.Location as LocationCurve;
-Curve curve = locCurve.Curve;
-
-XYZ startPoint = curve.GetEndPoint(0);         // t = 0.0
-XYZ midPoint   = curve.Evaluate(0.5, true);    // t = 0.5, normalized
-XYZ endPoint   = curve.GetEndPoint(1);         // t = 1.0
-XYZ direction  = (endPoint - startPoint).Normalize();
-
-// dZ of direction = elevation/inclination component
-// dZ = 0.0  → horizontal element
-// dZ = 1.0  → perfectly vertical element
-double elevAngleDeg = Math.Asin(direction.Z) * (180.0 / Math.PI);
-double deltaZ = endPoint.Z - startPoint.Z; // total elevation rise
-```
-
-### 6. PointFamily Start / End / Direction Pattern
-```csharp
-// For a PointBased family (LocationPoint only):
-LocationPoint locPoint = familyInstance.Location as LocationPoint;
-XYZ startPoint = locPoint.Point;  // base origin
-
-// GetTransform().BasisZ = element's 3D axis direction in world space
-Transform tfm = familyInstance.GetTransform();
-XYZ direction = tfm.BasisZ;  // normalized; this IS the 3D inclination direction
-
-// Compute end point if you know the length
-double length = familyInstance
-    .get_Parameter(BuiltInParameter.INSTANCE_LENGTH_PARAM).AsDouble();
-XYZ endPoint = startPoint + direction * length;
-
-// Elevation analysis from direction.Z
-// direction.Z == 0  → horizontal, direction.Z == 1 → vertical
-double elevAngleDeg = Math.Asin(direction.Z) * (180.0 / Math.PI);
-double xyAngleDeg   = Math.Atan2(direction.Y, direction.X) * (180.0 / Math.PI);
-```
-
-### 7. Divide Curve by Distance Interval Pattern (e.g. 12 ft Curve Every 3 ft)
-```csharp
-LocationCurve locCurve = element.Location as LocationCurve;
-Curve curve = locCurve.Curve;
-
-double totalLength  = curve.Length; // e.g. 12.0 ft
-double stepDistance = 3.0;         // step in feet (e.g. 3.0 ft)
-
-for (double dist = 0.0; dist <= totalLength + 1e-6; dist += stepDistance)
-{
-    // Clamp to [0, totalLength] to avoid floating point overshoot
-    double clampedDist = Math.Min(dist, totalLength);
-    
-    // Normalized parameter t = distance / totalLength
-    double tNormalized = clampedDist / totalLength; // 0.0, 0.25, 0.50, 0.75, 1.0
-    tNormalized = Math.Clamp(tNormalized, 0.0, 1.0);
-    
-    // Evaluate 3D point at normalized parameter
-    XYZ pointAtDist = curve.Evaluate(tNormalized, normalized: true);
-    
-    // Compute local coordinate frame & tangent vector
-    Transform der = curve.ComputeDerivatives(tNormalized, normalized: true);
-    XYZ tangent = der.BasisX.Normalize();
-}
-```
-
-### 8. Curve Local Transform & Tangent Vectors Pattern
-```csharp
-// ComputeDerivatives returns a Transform object representing the local
-// coordinate frame at any point along the curve!
-Transform localTransform = curve.ComputeDerivatives(0.5, normalized: true);
-
-XYZ pointOnCurve = localTransform.Origin;          // 3D position (same as Evaluate)
-XYZ tangentVec   = localTransform.BasisX.Normalize(); // Tangent direction along curve
-XYZ normalVec    = localTransform.BasisY.Normalize(); // Normal direction (curvature)
-XYZ binormalVec  = localTransform.BasisZ.Normalize(); // Binormal (perpendicular to osculating plane)
-```
-
-
-## 6. Per-Command Reasoning (Commands 01–06)
-
-### Command 01: Inspect Location
-```mermaid
-flowchart LR
-    S["Select Element"] --> L["Get Location Property"]
-    L --> LP["Cast to LocationPoint"]
-    L --> LC["Cast to LocationCurve"]
-```
-This command teaches how to extract basic positioning information from an element. It shows how `Location` is the base class and must be cast to a point or curve depending on the element type.
-
-### Command 02: Move Element
-```mermaid
-flowchart LR
-    S["Select Element"] --> TV["Define XYZ Translation"]
-    TV --> T["Start Transaction"]
-    T --> ME["MoveElement()"]
-```
-This demonstrates basic translation. It enforces the concept that moving an element requires a vector, not absolute coordinates.
-
-### Command 03: Copy Element
-```mermaid
-flowchart LR
-    S["Select Element"] --> CO["Define Copy Offset XYZ"]
-    CO --> T["Start Transaction"]
-    T --> CE["CopyElement()"]
-    CE --> I["Returns new ElementIds"]
-```
-Shows how copying works similarly to moving, but crucially returns the newly created element IDs, which is essential for chained operations.
-
-### Command 04: Rotate Element
-```mermaid
-flowchart LR
-    S["Select Element"] --> AL["Create Axis Line"]
-    AL --> AR["Angle in Radians"]
-    AR --> T["Start Transaction"]
-    T --> RE["RotateElement()"]
-```
-Teaches creating a rotation axis using `Line` and reinforces that the Revit API always expects angles in radians, not degrees.
-
-### Command 05: Mirror Element
-```mermaid
-flowchart LR
-    S["Select Element"] --> MP["Create Mirror Plane"]
-    MP --> T["Start Transaction"]
-    T --> ME["MirrorElement()"]
-```
-Explains how to define a 3D plane using a normal and origin, and demonstrates in-place mirroring vs. copying.
-
-### Command 06: Transform Geometry
-```mermaid
-flowchart LR
-    S["Select FamilyInstance"] --> GT["GetTransform()"]
-    GT --> R["Read Origin, BasisX/Y/Z"]
-    GT --> OP["OfPoint() to transform coords"]
-```
-Moves beyond simple `ElementTransformUtils` to accessing the raw math of an element's placement in the model, demonstrating coordinate system transformation.
-
 ---
 
-### Command 07: Get Point On Curve
+## 7. Deep Dive: Curve Evaluation & Sampling
 
-**Why this command exists**: A CurveBased family (beam, inclined framing, MEP element) stores its position as a `LocationCurve`. Once you have the underlying `Curve`, `curve.Evaluate(t, normalized: true)` lets you get *any* point along it. The `t` parameter is a proportion (0.0 = start, 0.5 = midpoint, 1.0 = end). The direction vector's **dZ component** directly encodes the elevation change per unit length — making this the primary analysis tool for inclined 3D elements.
+### 1. `Evaluate(t, normalized: true)` vs `Evaluate(rawParam, normalized: false)`
 
 ```mermaid
 flowchart TD
-    A["Select CurveBased FamilyInstance"] --> B["element.Location as LocationCurve"]
-    B --> C{"locCurve == null?"}
-    C -- "null" --> D["Return Failed — not CurveBased"]
-    C -- "valid" --> E["locCurve.Curve"]
-    E --> F["curve.GetEndPoint(0) → Start  t=0.0"]
-    E --> G["curve.Evaluate(0.5, true) → Midpoint  t=0.5"]
-    E --> H["curve.GetEndPoint(1) → End  t=1.0"]
-    E --> I["curve.Length → total length in feet"]
-    F & H --> J["direction = (End - Start).Normalize()"]
-    J --> K["direction.Z → elevation component"]
-    K --> L["Asin(direction.Z) → elevation angle in degrees"]
+    Curve["3D Curve (e.g. Line, Arc, Spline)"] --> Mode{"Evaluation Mode?"}
+    
+    Mode -->|"normalized = true"| Norm["t ∈ [0.0, 1.0]<br/>0.0 = Start, 0.5 = Midpoint, 1.0 = End"]
+    Mode -->|"normalized = false"| Raw["t ∈ [t_start, t_end]<br/>Line: Distance in feet<br/>Arc: Angle in radians"]
 ```
 
-**Architectural unlock**: `curve.Evaluate(t, normalized)` is the universal point-on-curve query tool. The `direction.Z` pattern is how you programmatically detect horizontal vs. inclined vs. vertical elements — essential for structural analysis automation.
-
----
-
-### Command 08: Point Family Start / End / Direction
-
-**Why this command exists**: A PointBased FamilyInstance (OneLevelBased column, inclined structural element) only exposes a single XYZ via `LocationPoint` — its base origin. You have a point and a length, but **no end point and no direction**. The solution is `GetTransform().BasisZ` — the element's local Z axis expressed in world space. For a plumb column this is `(0,0,1)`. For an inclined element it tilts proportionally. Multiplying `BasisZ × Length` gives the end point. The `BasisZ.Z` component is the sine of the elevation angle.
-
-```mermaid
-flowchart TD
-    A["Select FamilyInstance"] --> B{"Location Type?"}
-    B -- "LocationCurve" --> C["CurveBased: direct start/end from curve"]
-    C --> DIR["direction = End - Start / .Normalize()"]
-    B -- "LocationPoint" --> D["PointBased: only base point available"]
-    D --> D1["startPoint = locPoint.Point"]
-    D --> D2["familyInstance.GetTransform().BasisZ"]
-    D2 --> D3["TryGetLength: BuiltInParam + named params"]
-    D3 --> D4["endPoint = startPoint + BasisZ * Length"]
-    D2 & D4 --> DIR
-    DIR --> E["dZ component"]
-    DIR --> F["XY Angle = Atan2(dY, dX)"]
-    DIR --> G["Elevation = Asin(dZ) in degrees"]
-    E --> H{"dZ value?"}
-    H -- "≈ 0" --> H1["Horizontal"]
-    H -- "≈ ±1" --> H2["Vertical"]
-    H -- "between" --> H3["Inclined in 3D"]
-```
-
-**Architectural unlock**: `GetTransform().BasisZ` answers *"In which direction does this element extend in 3D world space?"* for any PointBased FamilyInstance. This is the only API path to the 3D axis direction when `LocationCurve` is not available — critical for structural, MEP, and any inclined element analysis.
-
----
-
-### Command 09: Divide Curve By Distance (Custom Intervals & Stations)
-
-**Why this command exists**: Many real-world BIM automation workflows require placing elements or sampling geometry at fixed distance intervals along an element rather than just at the midpoint or ends. Examples include placing structural stiffeners, MEP pipe/duct hangers every 6 feet, rebar stirrups, or analyzing clearances at regular stations. This command shows how to map any physical distance $d$ (e.g. 3 ft along a 12 ft curve) to the normalized parameter domain $t \in [0.0, 1.0]$, evaluate 3D points, and retrieve the tangent vectors using `ComputeDerivatives()`.
-
-```mermaid
-flowchart TD
-    A["Select CurveBased Element (12 ft Beam)"] --> B["locCurve.Curve"]
-    B --> C["Total Length L = curve.Length (12.0 ft)"]
-    C --> D["Define Step Interval d = 3.0 ft"]
-    D --> E["Loop: dist = 0, 3, 6, 9, 12 ft"]
-    E --> F["Normalized Param t = dist / L"]
-    F --> G["curve.Evaluate(t, true) → 3D Point"]
-    F --> H["curve.ComputeDerivatives(t, true) → Local Transform"]
-    H --> I["Transform.BasisX → Tangent Vector"]
-```
-
-**Architectural unlock**: `t = dist / totalLength` paired with `curve.Evaluate(t, true)` enables universal equidistant sampling across any curve geometry in Revit.
-
----
-
-## 7. Deep Dive: `Curve.Evaluate(param, normalized)` — True vs. False & Custom Spacing
-
-### 1. How to Get the Middle of a Curve
-
-There are two primary ways to compute the midpoint of a curve in Revit API:
-
-#### Method A: Normalized Parameter (Recommended)
-```csharp
-// normalized = true maps curve start to 0.0 and end to 1.0
-XYZ midPoint = curve.Evaluate(0.5, normalized: true);
-```
-
-#### Method B: Raw / Natural Parameter
-```csharp
-// Query raw parameter bounds from the geometry kernel
-double rawStart = curve.GetEndParameter(0);
-double rawEnd   = curve.GetEndParameter(1);
-double rawMid   = (rawStart + rawEnd) / 2.0;
-
-// normalized = false uses the raw geometric parameter domain
-XYZ midPoint = curve.Evaluate(rawMid, normalized: false);
-```
-> Both methods produce the exact same 3D point `(X, Y, Z)` in space. Method A is significantly cleaner and less error-prone.
-
----
-
-### 2. When to Use `true` vs. When to Use `false`
-
-| Property | `normalized: true` (Proportional) | `normalized: false` (Raw Parameter) |
+| Aspect | Normalized Parameter (`normalized = true`) | Raw Parameter (`normalized = false`) |
 | :--- | :--- | :--- |
-| **Parameter Domain** | Strictly $[0.0, 1.0]$ | $[t_{\text{min}}, t_{\text{max}}]$ from `GetEndParameter(0)` / `(1)` |
-| **Start Point** | $t = 0.0$ | $t = \text{curve.GetEndParameter}(0)$ |
-| **Mid Point** | $t = 0.5$ | $t = (\text{rawStart} + \text{rawEnd}) / 2.0$ |
-| **End Point** | $t = 1.0$ | $t = \text{curve.GetEndParameter}(1)$ |
+| **Parameter Range** | Always strictly $0.0 \dots 1.0$ | Varies $[t_{\text{start}}, t_{\text{end}}]$ |
 | **Line Behavior** | $t$ is the percentage of total length | $t$ is arc-length distance in feet from line origin |
 | **Arc / Circle Behavior** | $t$ is fraction of total arc span $(0 \dots 1)$ | $t$ is angle $\theta$ in radians $(0 \dots 2\pi)$ |
-| **NURBS / Spline Behavior** | $t$ is normalized across knot domain | $t$ is raw knot parameter value |
-| **When to Use** | • Dividing curves into equal segments ($i/N$)<br/>• Finding midpoints ($0.5$) or quarter points ($0.25$)<br/>• Sampling by distance ratio ($\text{dist} / \text{Length}$)<br/>• General geometry evaluation without knowing curve type | • Handling outputs from `curve.Project(pt).Parameter`<br/>• Handling intersection results `IntersectionResult.Parameter`<br/>• Working directly with radian angles on Arcs/Ellipses<br/>• Custom mathematical curve stepping along knot vectors |
 
 ---
 
-### 3. Changing the Value: Sampling Every $X$ Feet (e.g. Every 3 ft on a 12 ft Curve)
+### 2. Changing the Value: Sampling Every $X$ Feet (e.g. Every 3 ft on a 12 ft Curve)
 
-To evaluate points at any custom distance $d$ along a curve of total length $L$:
-
-$$\text{Normalized Parameter } t = \frac{\text{Distance Along Curve } d}{\text{Total Curve Length } L}$$
-
-#### Example: 12 ft Beam Sampled Every 3 ft ($L = 12\text{ ft}, \Delta d = 3\text{ ft}$)
-
-| Step | Distance $d$ (ft) | Formula $t = d / L$ | Parameter $t$ | Evaluation Call | Description |
-| :---: | :---: | :---: | :---: | :--- | :--- |
-| 0 | $0.0\text{ ft}$ | $0 / 12$ | **$0.00$** | `curve.Evaluate(0.00, true)` | **Start Point** (`GetEndPoint(0)`) |
-| 1 | $3.0\text{ ft}$ | $3 / 12$ | **$0.25$** | `curve.Evaluate(0.25, true)` | **Quarter Point** (25% span) |
-| 2 | $6.0\text{ ft}$ | $6 / 12$ | **$0.50$** | `curve.Evaluate(0.50, true)` | **Midpoint** (50% span) |
-| 3 | $9.0\text{ ft}$ | $9 / 12$ | **$0.75$** | `curve.Evaluate(0.75, true)` | **Three-Quarter Point** (75% span) |
-| 4 | $12.0\text{ ft}$ | $12 / 12$ | **$1.00$** | `curve.Evaluate(1.00, true)` | **End Point** (`GetEndPoint(1)`) |
-
-#### Robust Sampling Implementation in C#
 ```csharp
 double totalLength = curve.Length; // 12.0 ft
 double stepDistance = 3.0;        // 3.0 ft interval
 
 for (double dist = 0.0; dist <= totalLength + 1e-6; dist += stepDistance)
 {
-    // Clamp to prevent floating-point overshoot past 1.0
     double clampedDist = Math.Min(dist, totalLength);
     double tNormalized = Math.Clamp(clampedDist / totalLength, 0.0, 1.0);
     
     XYZ point = curve.Evaluate(tNormalized, normalized: true);
-    
-    // Process point (e.g. place family instance, hanger, stiffener)
+    // Process point (e.g. place hanger, stiffener)
 }
 ```
 
 ---
 
-### 4. Connection Between Curve Evaluation and `Transform`
+## 8. Command 10 — Get LocationPoint End Point & Direction
 
-When evaluating a curve, `curve.ComputeDerivatives(t, normalized)` returns an `Autodesk.Revit.DB.Transform` object representing the full local coordinate frame at that point:
+**File:** [`GetLocationPointEndPointCommand.cs`](Commands/GetLocationPointEndPointCommand.cs)
 
 ```mermaid
-graph TD
-    CD["curve.ComputeDerivatives(t, true)"] --> TF["Transform Object"]
-    TF --> O["Transform.Origin = 3D Point on Curve"]
-    TF --> BX["Transform.BasisX = Tangent Vector (Curve Direction)"]
-    TF --> BY["Transform.BasisY = Normal Vector (Curvature)"]
-    TF --> BZ["Transform.BasisZ = Binormal Vector"]
+flowchart TD
+    Pick["Pick Element"] --> CheckType{"Location Type?"}
+    CheckType -->|"LocationPoint"| LocPt["Read startPoint = locPoint.Point"]
+    LocPt --> Ray["Method 1: startPoint + (HandOrientation * length)"]
+    LocPt --> Matrix["Method 2: Transform.OfPoint(localEndPoint)"]
+    LocPt --> MEP["Method 3: MEP ConnectorManager Ports"]
+    LocPt --> Elev["Infeed vs Outfeed Z-Elevation Analysis (ΔZ, Run, Slope)"]
+    
+    CheckType -->|"LocationCurve"| LocCrv["Read curve.GetEndPoint(0) and (1)<br/>Direction = (End - Start).Normalize()"]
 ```
 
-This means you can calculate both the exact 3D location and the orientation matrix required to rotate and place a 3D family instance along the curve in a single call.
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class GetLocationPointEndPointCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
+
+        Reference pickedRef = uiDoc.Selection.PickObject(ObjectType.Element, "Select an element to calculate End Point");
+        Element element = doc.GetElement(pickedRef);
+
+        if (element is FamilyInstance familyInstance && element.Location is LocationPoint locPoint)
+        {
+            XYZ startPoint = locPoint.Point;
+            double length = familyInstance.LookupParameter("Length")?.AsDouble() ?? 10.0;
+
+            // 1. Universal Vector Ray Projection (HandOrientation)
+            XYZ handDir = familyInstance.HandOrientation;
+            XYZ endPointHand = startPoint + (handDir * length);
+
+            // 2. 3D Transform Matrix (Transform.OfPoint)
+            Autodesk.Revit.DB.Transform transform = familyInstance.GetTotalTransform();
+            XYZ endPointTransform = transform.OfPoint(new XYZ(length, 0, 0));
+
+            // 3. Elevation Analysis
+            double deltaZ = endPointHand.Z - startPoint.Z;
+            double horizontalRun = Math.Sqrt(Math.Pow(endPointHand.X - startPoint.X, 2) + Math.Pow(endPointHand.Y - startPoint.Y, 2));
+            double slopePercent = (horizontalRun > 0.0001) ? (deltaZ / horizontalRun) * 100.0 : 0.0;
+
+            TaskDialog.Show("End Point Result", 
+                $"Start Point (Infeed) : ({startPoint.X:F2}, {startPoint.Y:F2}, {startPoint.Z:F2})\n" +
+                $"End Point (Outfeed)  : ({endPointHand.X:F2}, {endPointHand.Y:F2}, {endPointHand.Z:F2})\n" +
+                $"Height Delta (ΔZ)    : {deltaZ:F3} ft\n" +
+                $"Calculated Slope     : {slopePercent:F1}%");
+        }
+
+        return Result.Succeeded;
+    }
+}
+```
 
 ---
 
-## 8. Common Mistakes to Avoid
+## 9. Common Mistakes to Avoid
 
 1. **Modifying Location without a Transaction** — all model changes require a Transaction.
 2. **Using degrees instead of radians** for `RotateElement` — always use `Math.PI / 180 * degrees`.
-3. **Confusing `MirrorElement` (moves) with `MirrorElements` (creates a copy)**.
+3. **Hardcoding $Z = 0$ in 2D polar formulas** — forces flat calculation and ignores 3D inclination.
 4. **Forgetting `GetTransform()` is only on `FamilyInstance`** — not on `Wall`, `Floor`, etc.
-5. **Passing a zero-length rotation axis `Line`** — `Line.CreateBound` with identical start/end throws an exception.
-6. **Assuming `LocationPoint` gives the full 3D position** — for inclined elements you must also use `GetTransform().BasisZ` to find the direction.
-7. **Using `curve.Evaluate(t, normalized: false)` with fractional values ($0.0 \dots 1.0$)** — passing $0.5$ with `normalized: false` evaluates at $0.5$ feet on a line or $0.5$ radians on an arc, NOT the midpoint!
-8. **Floating-point overshoot in step loops** — always clamp $t = \text{Math.Clamp}(d / L, 0.0, 1.0)$ to avoid evaluating slightly past $1.0$ (e.g. $1.0000001$).
+5. **Assuming `LocationPoint` gives the full 3D direction** — always use `HandOrientation` or `GetTransform().BasisZ`.
+6. **Calling `MEPModel.ConnectorManager` on Non-MEP Families** — causes `NullReferenceException`.
 
 ---
 
-## 9. Transform API Cheat Sheet
+## 10. Transform API Cheat Sheet
 
 | API Symbol | Description | Code Example |
 | :--- | :--- | :--- |
 | `Element.Location` | Gets physical location of element. | `Location loc = elem.Location;` |
-| `LocationPoint` | Point-based location (doors, columns). | `XYZ pt = (loc as LocationPoint).Point;` |
-| `LocationCurve` | Curve-based location (walls, beams). | `Curve c = (loc as LocationCurve).Curve;` |
-| `curve.GetEndPoint(0)` | Start point of a curve ($t = 0.0$). | `XYZ start = curve.GetEndPoint(0);` |
-| `curve.GetEndPoint(1)` | End point of a curve ($t = 1.0$). | `XYZ end = curve.GetEndPoint(1);` |
-| `curve.Evaluate(0.5, true)` | Midpoint using normalized proportion ($0.0 \dots 1.0$). | `XYZ mid = curve.Evaluate(0.5, true);` |
-| `curve.Evaluate(dist / len, true)` | Custom point at distance `dist` along curve. | `XYZ pt = curve.Evaluate(3.0 / 12.0, true);` |
-| `curve.Evaluate(rawParam, false)` | Point using raw parameter $[t_{\text{start}}, t_{\text{end}}]$. | `XYZ pt = curve.Evaluate(rawParam, false);` |
-| `curve.GetEndParameter(0)` | Raw start parameter of curve. | `double t0 = curve.GetEndParameter(0);` |
-| `curve.GetEndParameter(1)` | Raw end parameter of curve. | `double t1 = curve.GetEndParameter(1);` |
-| `curve.ComputeDerivatives(t, true)` | Returns `Transform` with Origin & Tangent (`BasisX`). | `Transform tf = curve.ComputeDerivatives(0.5, true);` |
-| `curve.Length` | Total arc length of the curve in feet. | `double len = curve.Length;` |
-| `MoveElement` | Translates an element by an XYZ vector. | `ElementTransformUtils.MoveElement(doc, id, vec);` |
-| `CopyElement` | Copies an element, returns new IDs. | `ElementTransformUtils.CopyElement(doc, id, offset);` |
-| `RotateElement` | Rotates an element around an axis (radians). | `ElementTransformUtils.RotateElement(doc, id, axis, rad);` |
-| `MirrorElement` | Mirrors an element in-place across a plane. | `ElementTransformUtils.MirrorElement(doc, id, plane);` |
-| `GetTransform()` | Gets the 4×4 matrix of a FamilyInstance. | `Transform t = inst.GetTransform();` |
-| `Transform.BasisZ` | Element's local Z axis = 3D direction in world. | `XYZ dir = inst.GetTransform().BasisZ;` |
-| `Transform.OfPoint(pt)` | Converts a local point to world coordinates. | `XYZ world = t.OfPoint(localPt);` |
-| `direction.Normalize()` | Returns a unit vector from a direction. | `XYZ unit = (end - start).Normalize();` |
-| `Math.Asin(dZ) → degrees` | Elevation angle from direction.Z component. | `double deg = Math.Asin(dir.Z) * 180 / Math.PI;` |
-| `Math.Atan2(dY, dX) → degrees` | XY plan rotation angle from direction. | `double deg = Math.Atan2(dir.Y, dir.X) * 180 / Math.PI;` |
-
-
+| `LocationPoint` | Point-based location (doors, columns, equipment). | `XYZ pt = (loc as LocationPoint).Point;` |
+| `LocationCurve` | Curve-based location (walls, beams, ducts, pipes). | `Curve c = (loc as LocationCurve).Curve;` |
+| `familyInstance.HandOrientation` | Local X-axis unit vector in 3D world space. | `XYZ dir = inst.HandOrientation;` |
+| `familyInstance.FacingOrientation` | Local Y-axis unit vector in 3D world space. | `XYZ dir = inst.FacingOrientation;` |
+| `Transform.BasisZ` | Element's local Z-axis = 3D orientation axis in world space. | `XYZ dir = inst.GetTransform().BasisZ;` |
+| `Transform.OfPoint(localPt)` | Converts a local coordinate to world coordinates. | `XYZ world = t.OfPoint(localPt);` |
+| `direction.Normalize()` | Returns a 3D unit vector from two points. | `XYZ unit = (end - start).Normalize();` |
