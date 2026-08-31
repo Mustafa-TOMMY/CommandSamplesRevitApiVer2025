@@ -1,8 +1,24 @@
 # Module 15 — Filters & Advanced Collection
 
-## 1. Mental Model & Architecture
+Welcome to the **Filters & Advanced Collection Module** educational documentation for the Revit API. In Autodesk Revit, models can contain hundreds of thousands of elements. While **Module 02 (ElementCollection)** introduces basic database queries (`OfCategory`, `OfClass`, `WhereElementIsNotElementType`), **Module 15** teaches you how to build **high-performance search pipelines, complex boolean logic trees, rule-based parameter filters, true 3D physical collision detection, and persistent View Filters (`ParameterFilterElement`)**.
 
-While **Module 02 (ElementCollection)** introduces basic collection queries (`OfCategory`, `OfClass`, `WhereElementIsNotElementType`), **Module 15 (Filters & Advanced Collection)** focuses on high-performance database filtering, complex boolean composition, parameter rule factories, **true 3D physical collision detection**, and **persistent View Filters (`ParameterFilterElement`)**.
+---
+
+## 1. Module Purpose & Core Mental Model
+
+### Unmanaged C++ Database Querying vs. In-Memory LINQ
+
+To build high-performance Revit add-ins, you must understand where code executes:
+
+```
+Revit Document (Unmanaged C++ Core)
+       │
+       ▼  Native Filters (Quick & Slow) execute in C++ before objects enter .NET
+FilteredElementCollector
+       │
+       ▼  Only matching elements are allocated into CLR Memory
+C# Managed Application Memory (.NET 8.0)
+```
 
 ```mermaid
 flowchart TD
@@ -38,11 +54,38 @@ flowchart TD
     G2 --> Results
 ```
 
+### Why Advanced Filtering is Critical for BIM Automation
+1. **Performance at Scale:** Evaluating criteria natively in unmanaged C++ memory is **10x to 50x faster** than retrieving elements into C# and filtering with LINQ `.Where()`.
+2. **Memory Efficiency:** Avoids creating thousands of short-lived managed proxy objects, eliminating UI lag and garbage collection pressure.
+3. **Multi-Criteria Querying:** Combines diverse requirements (e.g. *Walls on Level 1 AND Length >= 10ft AND Fire Rating > 60min*) in a single native pass.
+4. **Physical 3D Clash Detection:** Detects true solid geometric collisions between architectural, structural, and MEP services without third-party clash software.
+5. **View Graphics Automation:** Automatically creates and applies persistent View Filters (`ParameterFilterElement`) to style drawing sheets.
+
 ---
 
-## 2. Quick Filters vs. Slow Filters
+## 2. Current Sample Index
 
-In the Revit API, every filter inherits from the abstract base class `ElementFilter`. Understanding whether a filter is **Quick** or **Slow** is vital for writing performant add-ins on large enterprise models:
+The following table lists the **9 educational Commands** implemented in Module 15 (`Samples/FiltersAndAdvancedCollection/Commands/`):
+
+| # | Command File | Main Concept | Important APIs | What the Learner Should Understand |
+| :-: | :--- | :--- | :--- | :--- |
+| **01** | [`LogicalFiltersCommand.cs`](Commands/LogicalFiltersCommand.cs) | Boolean Query Composition | `LogicalAndFilter`, `LogicalOrFilter`, `ElementLevelFilter` | How to combine multiple search rules into Boolean trees evaluated in native memory. |
+| **02** | [`ParameterRuleFilterCommand.cs`](Commands/ParameterRuleFilterCommand.cs) | Native Parameter Rules | `ElementParameterFilter`, `ParameterFilterRuleFactory` | How to filter by string, numeric, and inverted parameter conditions without loading elements into C#. |
+| **03** | [`MultiCategoryFilterCommand.cs`](Commands/MultiCategoryFilterCommand.cs) | Multi-Category Querying | `ElementMulticategoryFilter` | How to query multiple element categories simultaneously in one single database scan. |
+| **04** | [`ExclusionFilterCommand.cs`](Commands/ExclusionFilterCommand.cs) | ID Exclusion Filtering | `ExclusionFilter` | How to natively exclude specific element IDs (e.g. selected elements or template objects). |
+| **05** | [`BoundingBoxSpatialFilterCommand.cs`](Commands/BoundingBoxSpatialFilterCommand.cs) | AABB Spatial Filtering | `BoundingBoxIntersectsFilter`, `BoundingBoxIsInsideFilter`, `Outline` | How to use fast Axis-Aligned Bounding Box tests to pre-filter candidate clash sets. |
+| **06** | [`ElementIntersectsElementCommand.cs`](Commands/ElementIntersectsElementCommand.cs) | 3D Solid Collision | `ElementIntersectsElementFilter` | How to detect true physical 3D solid clashes against a selected host element. |
+| **07** | [`ElementIntersectsSolidCommand.cs`](Commands/ElementIntersectsSolidCommand.cs) | Clearance Buffer Envelope | `ElementIntersectsSolidFilter`, `GeometryCreationUtilities` | How to generate custom 3D clearance solids (+50mm offset) and check buffer violations. |
+| **08** | [`LinkedModelIntersectionCommand.cs`](Commands/LinkedModelIntersectionCommand.cs) | Cross-Model Clash Detection | `ElementIntersectsSolidFilter`, `RevitLinkInstance`, `SolidUtils` | How to transform linked model solids into host world space for cross-document clash detection. |
+| **09** | [`CreateViewFilterCommand.cs`](Commands/CreateViewFilterCommand.cs) | Persistent View Filters | `ParameterFilterElement.Create`, `View.AddFilter`, `View.SetFilterOverrides` | How to create persistent database View Filters and apply color overrides in Visibility/Graphics (VV/VG). |
+
+---
+
+## 3. Conceptual Foundations & Core Distinctions
+
+### 3.1 Quick Filters vs. Slow Filters
+
+In the Revit API, every filter inherits from the abstract base class `ElementFilter`. Understanding whether a filter is **Quick** or **Slow** is vital for writing performant add-ins:
 
 | Filter Type | Base Class | Performance | Execution Mechanism | Examples |
 | :--- | :--- | :--- | :--- | :--- |
@@ -55,11 +98,9 @@ In the Revit API, every filter inherits from the abstract base class `ElementFil
 
 ---
 
-## 3. Deep Dive: `LogicalAndFilter` vs. `LogicalOrFilter`
+### 3.2 `LogicalAndFilter` vs. `LogicalOrFilter`
 
-Revit allows you to build complex Boolean query trees in unmanaged C++ memory using `LogicalAndFilter` and `LogicalOrFilter`.
-
-### Conceptual Comparison
+Revit allows you to build complex Boolean query trees in unmanaged C++ memory:
 
 ```mermaid
 flowchart TD
@@ -81,8 +122,6 @@ flowchart TD
     AND --> Final["Result: (Walls OR Columns) on Level 1"]
 ```
 
-### Direct Feature Comparison
-
 | Feature | `LogicalAndFilter` | `LogicalOrFilter` |
 | :--- | :--- | :--- |
 | **Set Theory Operation** | **Intersection ($\cap$)** — Must satisfy all criteria | **Union ($\cup$)** — Must satisfy at least one criteria |
@@ -90,13 +129,85 @@ flowchart TD
 | **Effect on Result Count** | **Narrows / Reduces** candidate element count | **Widens / Increases** candidate element count |
 | **Constructor Overloads** | 1. `new LogicalAndFilter(filterA, filterB)`<br/>2. `new LogicalAndFilter(IList<ElementFilter>)` | 1. `new LogicalOrFilter(filterA, filterB)`<br/>2. `new LogicalOrFilter(IList<ElementFilter>)` |
 | **Collector Chaining** | Calling `.WherePasses(F1).WherePasses(F2)` implicitly acts as an **AND** | Chaining multiple `.WherePasses()` cannot do OR; you **must** use `LogicalOrFilter` |
-| **Primary Use Case** | Combining different criteria types (e.g., `Category == Wall` **AND** `Length >= 10ft`) | Grouping multiple alternatives (e.g., `Category == Ducts` **OR** `Category == Pipes`) |
+
+---
+
+### 3.3 The Parameter Filter Bridge: Module 05 vs. Module 15
+
+> [!IMPORTANT]
+> **Key Architectural Insight: Identifier vs. Live Data Container**
+> 
+> Does `ElementId lengthParamId = new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH);` get you a `Parameter` object like `element.get_Parameter()` or `element.LookupParameter()` from Module 05?
+>
+> **NO!** `ElementId` is merely the **Key / Address** of the parameter definition in the Revit database schema. It holds **no value** and belongs to **no element instance**.
+
+```mermaid
+flowchart TD
+    subgraph M15 ["Module 15: Database Search (Before you have the elements)"]
+        BIP["BuiltInParameter.CURVE_ELEM_LENGTH"]
+        EID["new ElementId(BIP)"]
+        BIP --> EID
+        EID --> Rule["ParameterFilterRuleFactory.CreateGreaterOrEqualRule(EID, 10.0)"]
+        Rule --> Query["Revit C++ Engine: Scan database for all matching elements"]
+    end
+
+    subgraph M05 ["Module 05: Element Property Access (After you have a specific element)"]
+        Elem["Wall Instance (Element #12345)"]
+        Elem --> GetParam["element.get_Parameter(BIP)"]
+        GetParam --> LiveParam["Parameter Object"]
+        LiveParam --> Val["val = parameter.AsDouble(); (e.g. 14.5 ft)"]
+    end
+```
+
+| Method / Expression | Return Type | What It Represents | Lifecycle Stage |
+| :--- | :--- | :--- | :--- |
+| **`new ElementId(BuiltInParameter.XYZ)`** | `ElementId` | **Schema Address / Column Key** for database indexing. | **Query Phase (Module 15):** You don't have the elements yet; you tell Revit *which parameter column* to inspect. |
+| **`element.get_Parameter(BuiltInParameter.XYZ)`** | `Parameter` | **Live Data Container** holding values (`.AsDouble()`, `.Set()`). | **Execution Phase (Module 05):** You have the element in hand and want to read or write its value. |
+| **`element.LookupParameter(string name)`** | `Parameter` | **Live Data Container** found by searching human string names. | **Execution Phase (Module 05):** Name-based lookup on a specific element. |
+| **`element.Parameters`** | `ParameterSet` | **Collection of all live containers** on the element. | **Inspection Phase (Module 05):** Iterating through all parameters on an element. |
+
+---
+
+### 3.4 Transient Query Filters vs. Persistent View Filters
+
+```mermaid
+flowchart TD
+    subgraph Step1 ["1. Define Filter Criteria (In-Memory)"]
+        Rule["FilterRule (ParameterFilterRuleFactory)"]
+        Filter["ElementParameterFilter(Rule)"]
+        Cats["Categories: List<ElementId> { OST_Walls }"]
+        Rule --> Filter
+    end
+
+    subgraph Step2 ["2. Create Database Element (Transaction Required)"]
+        PFE["ParameterFilterElement.Create(doc, 'Filter Name', Cats, Filter)"]
+        Filter --> PFE
+        Cats --> PFE
+    end
+
+    subgraph Step3 ["3. Apply to View (Visibility / Graphics VV / VG)"]
+        View["View (doc.ActiveView)"]
+        Add["view.AddFilter(filterElement.Id)"]
+        Vis["view.SetFilterVisibility(filterElement.Id, true/false)"]
+        OGS["view.SetFilterOverrides(filterElement.Id, overrideGraphicSettings)"]
+        
+        PFE --> Add --> View
+        PFE --> Vis --> View
+        PFE --> OGS --> View
+    end
+```
+
+| Aspect | `ElementParameterFilter` | `ParameterFilterElement` |
+| :--- | :--- | :--- |
+| **What It Is** | In-memory query filter object (`ElementSlowFilter`). | A **Revit Database Element** (`Autodesk.Revit.DB.Element`). |
+| **Storage** | Lives only in RAM during command execution. | **Persisted permanently** in the `.rvt` file with an `ElementId`. |
+| **Transaction Required?** | ❌ No (Read-only query). | ✔ **Yes** (`TransactionMode.Manual` required to create/edit). |
+| **Where You See It** | Inside C# code with `FilteredElementCollector`. | Inside the Revit UI under **Visibility/Graphic Overrides (VV/VG) $\rightarrow$ Filters tab**. |
+| **Primary Capabilities** | Filtering collector elements. | Overriding colors, projection lines, cut patterns, transparency, and turning visibility on/off per view. |
 
 ---
 
 ## 4. Comprehensive Master Reference Table: All Revit Filter Classes
-
-Below is the complete reference catalog of all filter classes in `Autodesk.Revit.DB`, categorized by their execution mechanism and real-world BIM objectives:
 
 ### 🔹 A. Logical Composition Filters (`ElementLogicalFilter`)
 
@@ -150,7 +261,7 @@ Below is the complete reference catalog of all filter classes in `Autodesk.Revit
 
 ---
 
-## 5. Spotlight: Why is `ElementLevelFilter` a Slow Filter?
+### 🔹 D. Spotlight: Why is `ElementLevelFilter` a Slow Filter?
 
 ```mermaid
 flowchart TD
@@ -165,11 +276,10 @@ flowchart TD
     Type3 --> Match
     Type4 --> Match
     
-    Match -->|Yes| Pass["Pass Element"]
-    Match -->|No| Discard["Discard"]
+    Match -->|"Yes"| Pass["Pass Element"]
+    Match -->|"No"| Discard["Discard"]
 ```
 
-### Why `ElementLevelFilter` is classified as a Slow Filter:
 * Unlike Category or Class (which are indexed in memory-cached header tables), an element's **Level** is stored differently across different Revit element kinds:
   * For **Walls**, it is stored in `BuiltInParameter.WALL_BASE_CONSTRAINT`.
   * For **Structural Columns**, it is stored in `BuiltInParameter.FAMILY_BASE_LEVEL_PARAM`.
@@ -180,9 +290,55 @@ flowchart TD
 
 ---
 
-## 6. Master Comparison Matrix: Similar Functions & When to Use Which
+## 5. Spatial & 3D Geometry Clash Detection Guide
 
-To help you decide which filter or query API to choose in different scenarios:
+```mermaid
+classDiagram
+    class ElementFilter {
+        <<abstract>>
+    }
+    class ElementSlowFilter {
+        <<abstract>>
+    }
+    class ElementIntersectsFilter {
+        <<abstract>>
+    }
+    class ElementIntersectsElementFilter {
+        +Element TargetElement
+        +bool Inverted
+    }
+    class ElementIntersectsSolidFilter {
+        +Solid TargetSolid
+        +bool Inverted
+    }
+    
+    ElementFilter <|-- ElementSlowFilter
+    ElementSlowFilter <|-- ElementIntersectsFilter
+    ElementIntersectsFilter <|-- ElementIntersectsElementFilter
+    ElementIntersectsFilter <|-- ElementIntersectsSolidFilter
+```
+
+### The 4 Intersection Classes
+1. **`ElementIntersectsFilter`**: The **abstract base class** for 3D geometry filters. It cannot be instantiated directly; it serves as the common polymorphic parent.
+2. **`ElementIntersectsElementFilter`**: Evaluates physical 3D solid collisions against an active model element in the same document.
+3. **`ElementIntersectsSolidFilter`**: Evaluates physical 3D collisions against an explicit in-memory `Solid` (ideal for clearance zones and transformed linked solids).
+4. **`ElementIntersection`**: Geometric intersection result evaluation / classification helper.
+
+### Cross-Model Linked Clash Detection Workflow:
+
+```mermaid
+flowchart TD
+    A["1. Pick Element in Linked Model<br/>(ObjectType.LinkedElement)"] --> B["2. Retrieve RevitLinkInstance<br/>and Link Document"]
+    B --> C["3. Extract 3D Solid from Linked Element<br/>(element.get_Geometry)"]
+    C --> D["4. Transform Solid into Host World Coordinates<br/>SolidUtils.CreateTransformed(solid, linkTransform)"]
+    D --> E["5. Create ElementIntersectsSolidFilter(transformedSolid)"]
+    E --> F["6. Execute Collector on Host Document<br/>FilteredElementCollector(hostDoc)"]
+    F --> G["7. Retrieve Host Elements Intersecting Linked Geometry"]
+```
+
+---
+
+## 6. Master Comparison Matrices & Decision Trees
 
 ### 1. Category Filtering Approaches
 
@@ -219,456 +375,590 @@ To help you decide which filter or query API to choose in different scenarios:
 
 ---
 
-## 7. Connecting the Dots: Module 05 (Parameters) vs. Module 15 (Parameter Filters)
+## 7. Command 01 — Logical Filters
 
-> [!IMPORTANT]
-> **Key Architectural Insight: Identifier vs. Live Data Container**
-> 
-> Does `ElementId lengthParamId = new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH);` get you a `Parameter` object like `element.get_Parameter()` or `element.LookupParameter()` from Module 05?
->
-> **NO!** `ElementId` is merely the **Key / Address** of the parameter definition in the Revit database schema. It holds **no value** and belongs to **no element instance**.
+**File:** [`LogicalFiltersCommand.cs`](Commands/LogicalFiltersCommand.cs)
+
+### Workflow & Architecture
 
 ```mermaid
 flowchart TD
-    subgraph M15 ["Module 15: Database Search (Before you have the elements)"]
-        BIP["BuiltInParameter.CURVE_ELEM_LENGTH"]
-        EID["new ElementId(BIP)"]
-        BIP --> EID
-        EID --> Rule["ParameterFilterRuleFactory.CreateGreaterOrEqualRule(EID, 10.0)"]
-        Rule --> Query["Revit C++ Engine: Scan database for all matching elements"]
-    end
-
-    subgraph M05 ["Module 05: Element Property Access (After you have a specific element)"]
-        Elem["Wall Instance (Element #12345)"]
-        Elem --> GetParam["element.get_Parameter(BIP)"]
-        GetParam --> LiveParam["Parameter Object"]
-        LiveParam --> Val["val = parameter.AsDouble(); (e.g. 14.5 ft)"]
-    end
+    Cats["Define Category Filters<br/>(Columns, Structural Columns, Framing)"] --> OrFilter["LogicalOrFilter<br/>(Columns OR Framing)"]
+    Level["Define Level Filter<br/>(Level 1)"] --> AndFilter["LogicalAndFilter<br/>(Structural Elements AND Level 1)"]
+    OrFilter --> AndFilter
+    AndFilter --> Collector["FilteredElementCollector(doc).WherePasses(combinedFilter)"]
+    Collector --> Results["List of Structural Elements on Level 1"]
 ```
 
-### Direct Concept Comparison
-
-| Method / Expression | Return Type | What It Represents | Lifecycle Stage |
-| :--- | :--- | :--- | :--- |
-| **`new ElementId(BuiltInParameter.XYZ)`** | `ElementId` | **Schema Address / Column Key** for database indexing. | **Query Phase (Module 15):** You don't have the elements yet; you tell Revit *which parameter column* to inspect. |
-| **`element.get_Parameter(BuiltInParameter.XYZ)`** | `Parameter` | **Live Data Container** holding values (`.AsDouble()`, `.Set()`). | **Execution Phase (Module 05):** You have the element in hand and want to read or write its value. |
-| **`element.LookupParameter(string name)`** | `Parameter` | **Live Data Container** found by searching human string names. | **Execution Phase (Module 05):** Name-based lookup on a specific element. |
-| **`element.Parameters`** | `ParameterSet` | **Collection of all live containers** on the element. | **Inspection Phase (Module 05):** Iterating through all parameters on an element. |
-
----
-
-### The 3 Parts of a Parameter Filter Rule
-
-When you build an `ElementParameterFilter`, you don't just check if a parameter exists; you evaluate whether its **value satisfies a specific rule**:
-
-```mermaid
-flowchart LR
-    A["1. Parameter ID<br/>(Which column?)<br/>e.g. CURVE_ELEM_LENGTH"] 
-    --> B["2. Operator / Evaluator<br/>(What check?)<br/>e.g. GreaterOrEqual"]
-    --> C["3. Target Value<br/>(Compared to what?)<br/>e.g. 10.0 ft"]
-    --> D["FilterRule"]
-    --> E["ElementParameterFilter"]
-```
-
----
-
-### Examples of What `ElementParameterFilter` Evaluates
-
-| Target Query Goal | `ParameterFilterRuleFactory` Method Call |
-| :--- | :--- |
-| **Walls longer than 10 ft** | `ParameterFilterRuleFactory.CreateGreaterOrEqualRule(lengthParamId, 10.0, 0.001)` |
-| **Doors whose Mark begins with 'D'** | `ParameterFilterRuleFactory.CreateBeginsWithRule(markParamId, "D", caseSensitive: false)` |
-| **Pipes whose Comments contain 'Chilled'** | `ParameterFilterRuleFactory.CreateContainsRule(commentsParamId, "Chilled", caseSensitive: false)` |
-| **Elements with non-empty Comments** | `ParameterFilterRuleFactory.CreateEqualsRule(commentsParamId, string.Empty, false)` with `inverted: true` |
-
----
-
-### What happens if an element does NOT have that parameter?
-
-If Revit encounters an element that does not have the queried parameter at all (for example, evaluating a Wall Length rule on a generic Model Line or Detail Component):
-* Revit evaluates the rule as **`False`**.
-* The element is automatically **skipped and excluded** from the collector results without throwing an exception.
-
----
-
-## 8. Deep Dive: 3D Geometry Intersection Filters
-
-```mermaid
-classDiagram
-    class ElementFilter {
-        <<abstract>>
-    }
-    class ElementSlowFilter {
-        <<abstract>>
-    }
-    class ElementIntersectsFilter {
-        <<abstract>>
-    }
-    class ElementIntersectsElementFilter {
-        +Element TargetElement
-        +bool Inverted
-    }
-    class ElementIntersectsSolidFilter {
-        +Solid TargetSolid
-        +bool Inverted
-    }
-    
-    ElementFilter <|-- ElementSlowFilter
-    ElementSlowFilter <|-- ElementIntersectsFilter
-    ElementIntersectsFilter <|-- ElementIntersectsElementFilter
-    ElementIntersectsFilter <|-- ElementIntersectsSolidFilter
-```
-
-### The 4 Intersection Classes
-
-1. **`ElementIntersectsFilter`**
-   * **Role:** The **abstract base class** for 3D geometry filters. It cannot be instantiated directly; it serves as the common polymorphic parent.
-2. **`ElementIntersectsElementFilter`**
-   * **Role:** Evaluates physical 3D solid collisions against an active model element in the same document.
-   * **Best used for:** Direct intra-document interference checks (e.g., Pipe vs. Duct, Beam vs. Wall).
-3. **`ElementIntersectsSolidFilter`**
-   * **Role:** Evaluates physical 3D collisions against an explicit in-memory `Solid`.
-   * **Best used for:** 
-     * **Clearance Zones:** Enlarged buffer envelopes (e.g. +50mm around MEP services).
-     * **Cross-Model Linked Clashes:** Solids extracted from a `RevitLinkInstance` and transformed into host world space.
-     * **Virtual Spaces:** Room solids, corridor bounds, or construction zones.
-4. **`ElementIntersection`**
-   * **Role:** Geometric intersection result evaluation / classification helper.
-
----
-
-## 9. Architectural Guide: Cross-Model Clash Detection
-
-In multi-discipline BIM environments, elements to be checked often reside in **Revit Links** (e.g., Structural Model linked into MEP Model).
-
-### The Coordinate Challenge:
-`ElementIntersectsElementFilter` cannot directly query across different documents because each linked model has its own local coordinate system and `Document` instance.
-
-### The Standard Solution Workflow:
-
-```mermaid
-flowchart TD
-    A["1. Pick Element in Linked Model<br/>(ObjectType.LinkedElement)"] --> B["2. Retrieve RevitLinkInstance<br/>and Link Document"]
-    B --> C["3. Extract 3D Solid from Linked Element<br/>(element.get_Geometry)"]
-    C --> D["4. Transform Solid into Host World Coordinates<br/>SolidUtils.CreateTransformed(solid, linkTransform)"]
-    D --> E["5. Create ElementIntersectsSolidFilter(transformedSolid)"]
-    E --> F["6. Execute Collector on Host Document<br/>FilteredElementCollector(hostDoc)"]
-    F --> G["7. Retrieve Host Elements Intersecting Linked Geometry"]
-```
-
----
-
-## 10. Deep Dive: Persistent View Filters (`ParameterFilterElement`) vs. In-Memory Query Filters (`ElementParameterFilter`)
-
-A fundamental distinction in the Revit API is between **Transient Query Filters** and **Persistent View Filters**:
-
-```mermaid
-flowchart TD
-    subgraph Step1 ["1. Define Filter Criteria (In-Memory)"]
-        Rule["FilterRule (ParameterFilterRuleFactory)"]
-        Filter["ElementParameterFilter(Rule)"]
-        Cats["Categories: List<ElementId> { OST_Walls }"]
-        Rule --> Filter
-    end
-
-    subgraph Step2 ["2. Create Database Element (Transaction Required)"]
-        PFE["ParameterFilterElement.Create(doc, 'Filter Name', Cats, Filter)"]
-        Filter --> PFE
-        Cats --> PFE
-    end
-
-    subgraph Step3 ["3. Apply to View (Visibility / Graphics VV / VG)"]
-        View["View (doc.ActiveView)"]
-        Add["view.AddFilter(filterElement.Id)"]
-        Vis["view.SetFilterVisibility(filterElement.Id, true/false)"]
-        OGS["view.SetFilterOverrides(filterElement.Id, overrideGraphicSettings)"]
-        
-        PFE --> Add --> View
-        PFE --> Vis --> View
-        PFE --> OGS --> View
-    end
-```
-
-### Direct Comparison: `ElementParameterFilter` vs. `ParameterFilterElement`
-
-| Aspect | `ElementParameterFilter` | `ParameterFilterElement` |
-| :--- | :--- | :--- |
-| **What It Is** | An in-memory query filter object (`ElementSlowFilter`). | A **Revit Database Element** (`Autodesk.Revit.DB.Element`). |
-| **Storage** | Lives only in RAM during command execution. | **Persisted permanently** in the `.rvt` file with an `ElementId`. |
-| **Transaction Required?** | ❌ No (Read-only query). | ✔ **Yes** (`TransactionMode.Manual` required to create/edit). |
-| **Where You See It** | Inside C# code with `FilteredElementCollector`. | Inside the Revit UI under **Visibility/Graphic Overrides (VV/VG) $\rightarrow$ Filters tab**. |
-| **Primary Capabilities** | Filtering collector elements. | Overriding colors, projection lines, cut patterns, transparency, and turning visibility on/off per view. |
-
----
-
-## 11. Learning Progression (Commands 01–09)
-
-| # | Command File | Class Name | Main API | What It Teaches |
-| :--- | :--- | :--- | :--- | :--- |
-| **01** | [LogicalFiltersCommand.cs](Commands/LogicalFiltersCommand.cs) | `LogicalFiltersCommand` | `LogicalAndFilter`, `LogicalOrFilter`, `ElementLevelFilter` | Combining multiple search rules using boolean logic trees in native C++ memory. |
-| **02** | [ParameterRuleFilterCommand.cs](Commands/ParameterRuleFilterCommand.cs) | `ParameterRuleFilterCommand` | `ElementParameterFilter`, `ParameterFilterRuleFactory` | Evaluating string, numeric, and inverted parameter conditions without loading elements into C#. |
-| **03** | [MultiCategoryFilterCommand.cs](Commands/MultiCategoryFilterCommand.cs) | `MultiCategoryFilterCommand` | `ElementMulticategoryFilter` | Querying multiple categories simultaneously in a single native collector pass. |
-| **04** | [ExclusionFilterCommand.cs](Commands/ExclusionFilterCommand.cs) | `ExclusionFilterCommand` | `ExclusionFilter` | Natively excluding specific element IDs (e.g., selected or already processed elements). |
-| **05** | [BoundingBoxSpatialFilterCommand.cs](Commands/BoundingBoxSpatialFilterCommand.cs) | `BoundingBoxSpatialFilterCommand` | `BoundingBoxIntersectsFilter`, `BoundingBoxIsInsideFilter`, `BoundingBoxContainsPointFilter`, `Outline` | Fast Axis-Aligned Bounding Box (AABB) spatial queries for pre-filtering candidate clash sets. |
-| **06** | [ElementIntersectsElementCommand.cs](Commands/ElementIntersectsElementCommand.cs) | `ElementIntersectsElementCommand` | `ElementIntersectsElementFilter` | 3D solid collision detection against a selected host element. |
-| **07** | [ElementIntersectsSolidCommand.cs](Commands/ElementIntersectsSolidCommand.cs) | `ElementIntersectsSolidCommand` | `ElementIntersectsSolidFilter`, `GeometryCreationUtilities` | Clearance envelope creation and custom 3D solid interference testing. |
-| **08** | [LinkedModelIntersectionCommand.cs](Commands/LinkedModelIntersectionCommand.cs) | `LinkedModelIntersectionCommand` | `ElementIntersectsSolidFilter`, `RevitLinkInstance`, `SolidUtils` | Cross-model clash detection: Transforming linked element solids to host world space for collision querying. |
-| **09** | [CreateViewFilterCommand.cs](Commands/CreateViewFilterCommand.cs) | `CreateViewFilterCommand` | `ParameterFilterElement.Create`, `View.AddFilter`, `View.SetFilterOverrides` | Creating persistent View Filters in the Revit database and applying color overrides in Visibility/Graphics. |
-
----
-
-## 12. Command Deep Dives & Code Recipes
-
-### 🔹 Command 01: `LogicalFiltersCommand`
-Demonstrates composing boolean filter trees combining Category filters with an `ElementLevelFilter`.
+### Complete Code Recipe
 
 ```csharp
-// 1. Create Category Filters
-ElementCategoryFilter colFilter = new ElementCategoryFilter(BuiltInCategory.OST_Columns);
-ElementCategoryFilter structColFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralColumns);
-ElementCategoryFilter framingFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralFraming);
-
-// 2. Combine with LogicalOrFilter (Columns OR Framing)
-LogicalOrFilter structuralElementsFilter = new LogicalOrFilter(new List<ElementFilter> 
-{ 
-    colFilter, 
-    structColFilter, 
-    framingFilter 
-});
-
-// 3. Create Level Filter
-ElementLevelFilter levelFilter = new ElementLevelFilter(targetLevel.Id);
-
-// 4. Combine with LogicalAndFilter: (Columns OR Framing) AND (On Level 1)
-LogicalAndFilter combinedFilter = new LogicalAndFilter(structuralElementsFilter, levelFilter);
-
-// 5. Query Native Collector
-IList<Element> results = new FilteredElementCollector(doc)
-    .WherePasses(combinedFilter)
-    .WhereElementIsNotElementType()
-    .ToElements();
-```
-
----
-
-### 🔹 Command 02: `ParameterRuleFilterCommand`
-Demonstrates native database parameter rules (numeric, string, and inverted) using `ParameterFilterRuleFactory`.
-
-```csharp
-// 1. Numeric Rule: Walls with Length >= 10.0 ft
-ElementId lengthParamId = new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH);
-FilterRule lengthRule = ParameterFilterRuleFactory.CreateGreaterOrEqualRule(lengthParamId, 10.0, 0.001);
-ElementParameterFilter wallLengthFilter = new ElementParameterFilter(lengthRule);
-
-// 2. String Rule: Doors with Mark beginning with "D"
-ElementId markParamId = new ElementId(BuiltInParameter.DOOR_NUMBER);
-FilterRule markRule = ParameterFilterRuleFactory.CreateBeginsWithRule(markParamId, "D", caseSensitive: false);
-ElementParameterFilter doorMarkFilter = new ElementParameterFilter(markRule);
-
-// 3. Inverted Rule: Elements where Comments is NOT empty ("")
-ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-FilterRule emptyRule = ParameterFilterRuleFactory.CreateEqualsRule(commentsParamId, string.Empty, false);
-ElementParameterFilter hasCommentsFilter = new ElementParameterFilter(emptyRule, inverted: true);
-```
-
----
-
-### 🔹 Command 03: `MultiCategoryFilterCommand`
-Queries multiple MEP distribution categories simultaneously in one native database pass.
-
-```csharp
-// Define multi-category collection
-ICollection<BuiltInCategory> mepCategories = new List<BuiltInCategory>
+[Transaction(TransactionMode.ReadOnly)]
+public class LogicalFiltersCommand : IExternalCommand
 {
-    BuiltInCategory.OST_DuctCurves,
-    BuiltInCategory.OST_PipeCurves,
-    BuiltInCategory.OST_CableTray,
-    BuiltInCategory.OST_Conduit
-};
-
-ElementMulticategoryFilter multiCatFilter = new ElementMulticategoryFilter(mepCategories);
-
-IList<Element> mepElements = new FilteredElementCollector(doc)
-    .WherePasses(multiCatFilter)
-    .WhereElementIsNotElementType()
-    .ToElements();
-```
-
----
-
-### 🔹 Command 04: `ExclusionFilterCommand`
-Natively skips selected or already processed elements during the database scan.
-
-```csharp
-ICollection<ElementId> selectedIds = uiDoc.Selection.GetElementIds();
-
-// Apply ExclusionFilter directly inside WherePasses
-ExclusionFilter exclusionFilter = new ExclusionFilter(selectedIds);
-
-IList<Element> remainingWalls = new FilteredElementCollector(doc)
-    .OfCategory(BuiltInCategory.OST_Walls)
-    .WhereElementIsNotElementType()
-    .WherePasses(exclusionFilter)
-    .ToElements();
-```
-
----
-
-### 🔹 Command 05: `BoundingBoxSpatialFilterCommand`
-Demonstrates fast Axis-Aligned Bounding Box (AABB) spatial queries for pre-filtering candidate elements.
-
-```csharp
-// 1. Define 3D Search Outline (+2.0 ft expansion)
-XYZ min = new XYZ(bbox.Min.X - 2.0, bbox.Min.Y - 2.0, bbox.Min.Z - 2.0);
-XYZ max = new XYZ(bbox.Max.X + 2.0, bbox.Max.Y + 2.0, bbox.Max.Z + 2.0);
-Outline searchOutline = new Outline(min, max);
-
-// 2. BoundingBoxIntersectsFilter (Touches / Overlaps region)
-BoundingBoxIntersectsFilter intersectsFilter = new BoundingBoxIntersectsFilter(searchOutline);
-
-// 3. BoundingBoxIsInsideFilter (Strictly contained inside region)
-BoundingBoxIsInsideFilter insideFilter = new BoundingBoxIsInsideFilter(searchOutline);
-
-// 4. BoundingBoxContainsPointFilter (Contains specific 3D coordinate)
-XYZ centerPoint = (bbox.Min + bbox.Max) * 0.5;
-BoundingBoxContainsPointFilter containsPointFilter = new BoundingBoxContainsPointFilter(centerPoint);
-```
-
----
-
-### 🔹 Command 06: `ElementIntersectsElementCommand`
-True 3D solid collision detection chaining Quick Bounding Box pre-filtering with Self Exclusion and 3D Solid slow filtering.
-
-```csharp
-// Step 1: Quick Bounding Box Pre-Filter (AABB)
-Outline outline = new Outline(targetBbox.Min, targetBbox.Max);
-BoundingBoxIntersectsFilter bboxFilter = new BoundingBoxIntersectsFilter(outline);
-
-// Step 2: Exclude target element itself (prevent self-clash)
-ExclusionFilter selfExclusion = new ExclusionFilter(new List<ElementId> { targetElement.Id });
-
-// Step 3: Exact 3D Solid Geometry Collision Filter
-ElementIntersectsElementFilter solidCollisionFilter = new ElementIntersectsElementFilter(targetElement);
-
-// Chaining: Quick -> Exclusion -> Slow 3D Solid
-IList<Element> clashingElements = new FilteredElementCollector(doc)
-    .WherePasses(bboxFilter)            // 1. Quick AABB filter
-    .WherePasses(selfExclusion)         // 2. Exclude self
-    .WherePasses(solidCollisionFilter)  // 3. Precise 3D boolean check
-    .WhereElementIsNotElementType()
-    .ToElements();
-```
-
----
-
-### 🔹 Command 07: `ElementIntersectsSolidCommand`
-Generates an in-memory extruded clearance volume (+50mm offset buffer) and queries elements penetrating the envelope.
-
-```csharp
-// 1. Build profile CurveLoop from expanded bounding coordinates
-CurveLoop profile = new CurveLoop();
-profile.Append(Line.CreateBound(p0, p1));
-profile.Append(Line.CreateBound(p1, p2));
-profile.Append(Line.CreateBound(p2, p3));
-profile.Append(Line.CreateBound(p3, p0));
-
-// 2. Create in-memory clearance Solid
-Solid clearanceSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
-    new List<CurveLoop> { profile },
-    XYZ.BasisZ,
-    height);
-
-// 3. Query elements penetrating this 3D clearance solid
-ElementIntersectsSolidFilter solidFilter = new ElementIntersectsSolidFilter(clearanceSolid);
-
-IList<Element> clearanceViolations = new FilteredElementCollector(doc)
-    .WherePasses(new ExclusionFilter(new List<ElementId> { hostElement.Id }))
-    .WherePasses(solidFilter)
-    .WhereElementIsNotElementType()
-    .ToElements();
-```
-
----
-
-### 🔹 Command 08: `LinkedModelIntersectionCommand`
-Cross-document clash detection between host document elements and linked model elements.
-
-```csharp
-// 1. Pick element from Linked Model
-Reference linkedRef = uiDoc.Selection.PickObject(ObjectType.LinkedElement);
-RevitLinkInstance linkInstance = hostDoc.GetElement(linkedRef) as RevitLinkInstance;
-Document linkDoc = linkInstance.GetLinkDocument();
-Element linkedElement = linkDoc.GetElement(linkedRef.LinkedElementId);
-
-// 2. Extract 3D Solid from linked element
-Solid linkedSolid = ExtractSolid(linkedElement);
-
-// 3. Transform Solid to Host World Coordinates
-Autodesk.Revit.DB.Transform linkTransform = linkInstance.GetTotalTransform();
-Solid transformedSolid = SolidUtils.CreateTransformed(linkedSolid, linkTransform);
-
-// 4. Query Host Document elements clashing with the transformed solid
-ElementIntersectsSolidFilter linkSolidFilter = new ElementIntersectsSolidFilter(transformedSolid);
-
-IList<Element> hostClashes = new FilteredElementCollector(hostDoc)
-    .WherePasses(linkSolidFilter)
-    .WhereElementIsNotElementType()
-    .ToElements();
-```
-
----
-
-### 🔹 Command 09: `CreateViewFilterCommand`
-Creates a persistent `ParameterFilterElement` in the Revit database and applies it to the active view's Visibility/Graphic Overrides (VV/VG) with red color overrides.
-
-```csharp
-// 1. Define target categories
-ICollection<ElementId> targetCategories = new List<ElementId>
-{
-    new ElementId(BuiltInCategory.OST_Walls)
-};
-
-// 2. Build Rule Criteria: Walls where Comments contains 'Fire'
-ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-FilterRule rule = ParameterFilterRuleFactory.CreateContainsRule(commentsParamId, "Fire", false);
-ElementParameterFilter criteria = new ElementParameterFilter(rule);
-
-// 3. Create persistent ParameterFilterElement in database
-using (Transaction t = new Transaction(doc, "Create and Apply View Filter"))
-{
-    t.Start();
-
-    ParameterFilterElement filterElement = ParameterFilterElement.Create(
-        doc, 
-        "Walls - Fire Safety Check", 
-        targetCategories, 
-        criteria);
-
-    // 4. Add Filter to Active View
-    if (!activeView.IsFilterApplied(filterElement.Id))
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
-        activeView.AddFilter(filterElement.Id);
+        var doc = commandData.Application.ActiveUIDocument.Document;
+
+        // 1. Create Category Filters
+        ElementCategoryFilter colFilter = new ElementCategoryFilter(BuiltInCategory.OST_Columns);
+        ElementCategoryFilter structColFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralColumns);
+        ElementCategoryFilter framingFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralFraming);
+
+        // 2. Combine with LogicalOrFilter (Columns OR Framing)
+        LogicalOrFilter structuralElementsFilter = new LogicalOrFilter(new List<ElementFilter> 
+        { 
+            colFilter, 
+            structColFilter, 
+            framingFilter 
+        });
+
+        // 3. Get target Level and create Level Filter
+        Level targetLevel = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().FirstOrDefault();
+        ElementLevelFilter levelFilter = new ElementLevelFilter(targetLevel.Id);
+
+        // 4. Combine with LogicalAndFilter: (Columns OR Framing) AND (On Level 1)
+        LogicalAndFilter combinedFilter = new LogicalAndFilter(structuralElementsFilter, levelFilter);
+
+        // 5. Query Native Collector
+        IList<Element> results = new FilteredElementCollector(doc)
+            .WherePasses(combinedFilter)
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("Logical Filters", $"Found {results.Count} structural elements on '{targetLevel.Name}'.");
+        return Result.Succeeded;
     }
-
-    // 5. Apply Red Line Graphic Overrides
-    OverrideGraphicSettings overrideSettings = new OverrideGraphicSettings();
-    overrideSettings.SetProjectionLineColor(new Color(255, 0, 0));
-    overrideSettings.SetProjectionLineWeight(5);
-
-    activeView.SetFilterOverrides(filterElement.Id, overrideSettings);
-    activeView.SetFilterVisibility(filterElement.Id, true);
-
-    t.Commit();
 }
 ```
 
 ---
 
-## 13. Summary of Best Practices & Common Pitfalls
+## 8. Command 02 — Parameter Rule Filters
 
-1. **Avoid LINQ for Base Filtering:** Always prefer `ElementParameterFilter` or `ParameterFilterRuleFactory` over `.Where(x => x.LookupParameter(...))` whenever possible.
-2. **Exclude Self in Collision Checks:** When checking clashes against a target element, always pass an `ExclusionFilter([target.Id])` to prevent the element from reporting a collision with itself.
-3. **Bounding Box Pre-Pass:** Before applying `ElementIntersectsElementFilter` or `ElementIntersectsSolidFilter`, always apply a `BoundingBoxIntersectsFilter` with the target's bounding box `Outline` to discard non-proximate elements instantly.
-4. **Always Transform Linked Solids:** Never pass a raw solid extracted from a linked model directly to `ElementIntersectsSolidFilter` without transforming it with `linkInstance.GetTotalTransform()`.
-5. **Chain Quick Filters with `ElementLevelFilter`:** Because `ElementLevelFilter` is a slow filter (it reads element parameter maps), always chain it after `.OfCategory()` or `.OfClass()` to maintain maximum query performance.
-6. **Persistent vs Transient Filters:** Remember that `ElementParameterFilter` is for C# database querying, while `ParameterFilterElement` is a database element for View Visibility/Graphics overrides (`VV / VG`).
+**File:** [`ParameterRuleFilterCommand.cs`](Commands/ParameterRuleFilterCommand.cs)
+
+### Workflow & Architecture
+
+```mermaid
+flowchart TD
+    Factory["ParameterFilterRuleFactory"]
+    Factory --> R1["CreateGreaterOrEqualRule (Length >= 10ft)"]
+    Factory --> R2["CreateBeginsWithRule (Door Mark starts with 'D')"]
+    Factory --> R3["CreateEqualsRule (Comments == '') + Inverted: true"]
+    
+    R1 --> F1["ElementParameterFilter(R1)"]
+    R2 --> F2["ElementParameterFilter(R2)"]
+    R3 --> F3["ElementParameterFilter(R3)"]
+    
+    F1 --> Collector["FilteredElementCollector(doc).WherePasses(F)"]
+```
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class ParameterRuleFilterCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var doc = commandData.Application.ActiveUIDocument.Document;
+
+        // 1. Numeric Rule: Walls with Length >= 10.0 ft
+        ElementId lengthParamId = new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH);
+        FilterRule lengthRule = ParameterFilterRuleFactory.CreateGreaterOrEqualRule(lengthParamId, 10.0, 0.001);
+        ElementParameterFilter wallLengthFilter = new ElementParameterFilter(lengthRule);
+
+        IList<Element> longWalls = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_Walls)
+            .WhereElementIsNotElementType()
+            .WherePasses(wallLengthFilter)
+            .ToElements();
+
+        // 2. String Rule: Doors with Mark beginning with "D"
+        ElementId markParamId = new ElementId(BuiltInParameter.DOOR_NUMBER);
+        FilterRule markRule = ParameterFilterRuleFactory.CreateBeginsWithRule(markParamId, "D", caseSensitive: false);
+        ElementParameterFilter doorMarkFilter = new ElementParameterFilter(markRule);
+
+        // 3. Inverted Rule: Elements where Comments is NOT empty ("")
+        ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+        FilterRule emptyRule = ParameterFilterRuleFactory.CreateEqualsRule(commentsParamId, string.Empty, false);
+        ElementParameterFilter hasCommentsFilter = new ElementParameterFilter(emptyRule, inverted: true);
+
+        TaskDialog.Show("Parameter Rules", $"Found {longWalls.Count} walls with length >= 10 ft.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 9. Command 03 — Multi-Category Queries
+
+**File:** [`MultiCategoryFilterCommand.cs`](Commands/MultiCategoryFilterCommand.cs)
+
+### Workflow & Architecture
+
+```mermaid
+flowchart LR
+    Cats["Define Categories List:<br/>Ducts, Pipes, Cable Trays, Conduits"] 
+    --> Filter["ElementMulticategoryFilter(Cats)"] 
+    --> Query["FilteredElementCollector(doc)<br/>.WherePasses(filter)"] 
+    --> Output["All MEP Distribution Elements in 1 Pass"]
+```
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class MultiCategoryFilterCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var doc = commandData.Application.ActiveUIDocument.Document;
+
+        // Define multi-category collection
+        ICollection<BuiltInCategory> mepCategories = new List<BuiltInCategory>
+        {
+            BuiltInCategory.OST_DuctCurves,
+            BuiltInCategory.OST_PipeCurves,
+            BuiltInCategory.OST_CableTray,
+            BuiltInCategory.OST_Conduit
+        };
+
+        ElementMulticategoryFilter multiCatFilter = new ElementMulticategoryFilter(mepCategories);
+
+        IList<Element> mepElements = new FilteredElementCollector(doc)
+            .WherePasses(multiCatFilter)
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("MultiCategory Filter", $"Found {mepElements.Count} total MEP curve elements.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 10. Command 04 — Exclusion Filter
+
+**File:** [`ExclusionFilterCommand.cs`](Commands/ExclusionFilterCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class ExclusionFilterCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
+
+        ICollection<ElementId> selectedIds = uiDoc.Selection.GetElementIds();
+        if (selectedIds.Count == 0)
+        {
+            TaskDialog.Show("Exclusion Filter", "Please select one or more walls first.");
+            return Result.Cancelled;
+        }
+
+        // Apply ExclusionFilter directly inside WherePasses
+        ExclusionFilter exclusionFilter = new ExclusionFilter(selectedIds);
+
+        IList<Element> remainingWalls = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_Walls)
+            .WhereElementIsNotElementType()
+            .WherePasses(exclusionFilter)
+            .ToElements();
+
+        TaskDialog.Show("Exclusion Filter", $"Remaining unselected walls: {remainingWalls.Count}");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 11. Command 05 — Bounding Box Spatial Filters
+
+**File:** [`BoundingBoxSpatialFilterCommand.cs`](Commands/BoundingBoxSpatialFilterCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class BoundingBoxSpatialFilterCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
+
+        Reference pickedRef = uiDoc.Selection.PickObject(ObjectType.Element, "Pick target element for spatial query");
+        Element targetElement = doc.GetElement(pickedRef);
+        BoundingBoxXYZ bbox = targetElement.get_BoundingBox(null);
+
+        // 1. Define 3D Search Outline (+2.0 ft expansion)
+        XYZ min = new XYZ(bbox.Min.X - 2.0, bbox.Min.Y - 2.0, bbox.Min.Z - 2.0);
+        XYZ max = new XYZ(bbox.Max.X + 2.0, bbox.Max.Y + 2.0, bbox.Max.Z + 2.0);
+        Outline searchOutline = new Outline(min, max);
+
+        // 2. BoundingBoxIntersectsFilter (Touches / Overlaps region)
+        BoundingBoxIntersectsFilter intersectsFilter = new BoundingBoxIntersectsFilter(searchOutline);
+
+        // 3. Exclude self
+        ExclusionFilter selfExclusion = new ExclusionFilter(new List<ElementId> { targetElement.Id });
+
+        IList<Element> nearbyElements = new FilteredElementCollector(doc)
+            .WherePasses(intersectsFilter)
+            .WherePasses(selfExclusion)
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("Bounding Box Filter", $"Found {nearbyElements.Count} elements within 2ft bounding box.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 12. Command 06 — 3D Element Collision Detection
+
+**File:** [`ElementIntersectsElementCommand.cs`](Commands/ElementIntersectsElementCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class ElementIntersectsElementCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
+
+        Reference pickedRef = uiDoc.Selection.PickObject(ObjectType.Element, "Pick host element for 3D clash check");
+        Element targetElement = doc.GetElement(pickedRef);
+        BoundingBoxXYZ targetBbox = targetElement.get_BoundingBox(null);
+
+        // Step 1: Quick Bounding Box Pre-Filter (AABB)
+        Outline outline = new Outline(targetBbox.Min, targetBbox.Max);
+        BoundingBoxIntersectsFilter bboxFilter = new BoundingBoxIntersectsFilter(outline);
+
+        // Step 2: Exclude target element itself (prevent self-clash)
+        ExclusionFilter selfExclusion = new ExclusionFilter(new List<ElementId> { targetElement.Id });
+
+        // Step 3: Exact 3D Solid Geometry Collision Filter
+        ElementIntersectsElementFilter solidCollisionFilter = new ElementIntersectsElementFilter(targetElement);
+
+        // Chaining: Quick -> Exclusion -> Slow 3D Solid
+        IList<Element> clashingElements = new FilteredElementCollector(doc)
+            .WherePasses(bboxFilter)            // 1. Quick AABB filter
+            .WherePasses(selfExclusion)         // 2. Exclude self
+            .WherePasses(solidCollisionFilter)  // 3. Precise 3D boolean check
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("3D Clash Result", $"Found {clashingElements.Count} elements clashing with {targetElement.Name}.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 13. Command 07 — Clearance Envelope & Solid Intersection
+
+**File:** [`ElementIntersectsSolidCommand.cs`](Commands/ElementIntersectsSolidCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class ElementIntersectsSolidCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
+
+        Reference pickedRef = uiDoc.Selection.PickObject(ObjectType.Element, "Pick element to test clearance envelope");
+        Element hostElement = doc.GetElement(pickedRef);
+        BoundingBoxXYZ bbox = hostElement.get_BoundingBox(null);
+
+        // 1. Build profile CurveLoop from expanded bounding coordinates (+0.5 ft clearance buffer)
+        double offset = 0.5;
+        XYZ p0 = new XYZ(bbox.Min.X - offset, bbox.Min.Y - offset, bbox.Min.Z - offset);
+        XYZ p1 = new XYZ(bbox.Max.X + offset, bbox.Min.Y - offset, bbox.Min.Z - offset);
+        XYZ p2 = new XYZ(bbox.Max.X + offset, bbox.Max.Y + offset, bbox.Min.Z - offset);
+        XYZ p3 = new XYZ(bbox.Min.X - offset, bbox.Max.Y + offset, bbox.Min.Z - offset);
+
+        CurveLoop profile = new CurveLoop();
+        profile.Append(Line.CreateBound(p0, p1));
+        profile.Append(Line.CreateBound(p1, p2));
+        profile.Append(Line.CreateBound(p2, p3));
+        profile.Append(Line.CreateBound(p3, p0));
+
+        double height = (bbox.Max.Z - bbox.Min.Z) + (offset * 2);
+
+        // 2. Create in-memory clearance Solid
+        Solid clearanceSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
+            new List<CurveLoop> { profile },
+            XYZ.BasisZ,
+            height);
+
+        // 3. Query elements penetrating this 3D clearance solid
+        ElementIntersectsSolidFilter solidFilter = new ElementIntersectsSolidFilter(clearanceSolid);
+
+        IList<Element> clearanceViolations = new FilteredElementCollector(doc)
+            .WherePasses(new ExclusionFilter(new List<ElementId> { hostElement.Id }))
+            .WherePasses(solidFilter)
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("Clearance Violations", $"Found {clearanceViolations.Count} objects violating the 0.5ft clearance buffer.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 14. Command 08 — Cross-Model Linked Clash Detection
+
+**File:** [`LinkedModelIntersectionCommand.cs`](Commands/LinkedModelIntersectionCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.ReadOnly)]
+public class LinkedModelIntersectionCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var uiDoc = commandData.Application.ActiveUIDocument;
+        var hostDoc = uiDoc.Document;
+
+        // 1. Pick element from Linked Model
+        Reference linkedRef = uiDoc.Selection.PickObject(ObjectType.LinkedElement, "Pick an element from a Linked Model");
+        RevitLinkInstance linkInstance = hostDoc.GetElement(linkedRef) as RevitLinkInstance;
+        Document linkDoc = linkInstance.GetLinkDocument();
+        Element linkedElement = linkDoc.GetElement(linkedRef.LinkedElementId);
+
+        // 2. Extract 3D Solid from linked element
+        Solid linkedSolid = ExtractSolid(linkedElement);
+        if (linkedSolid == null)
+        {
+            TaskDialog.Show("Error", "Could not extract solid geometry from linked element.");
+            return Result.Failed;
+        }
+
+        // 3. Transform Solid to Host World Coordinates
+        Autodesk.Revit.DB.Transform linkTransform = linkInstance.GetTotalTransform();
+        Solid transformedSolid = SolidUtils.CreateTransformed(linkedSolid, linkTransform);
+
+        // 4. Query Host Document elements clashing with the transformed solid
+        ElementIntersectsSolidFilter linkSolidFilter = new ElementIntersectsSolidFilter(transformedSolid);
+
+        IList<Element> hostClashes = new FilteredElementCollector(hostDoc)
+            .WherePasses(linkSolidFilter)
+            .WhereElementIsNotElementType()
+            .ToElements();
+
+        TaskDialog.Show("Cross-Model Clash", $"Found {hostClashes.Count} host elements clashing with linked {linkedElement.Name}.");
+        return Result.Succeeded;
+    }
+
+    private Solid ExtractSolid(Element element)
+    {
+        Options opt = new Options { DetailLevel = ViewDetailLevel.Fine, ComputeReferences = false };
+        GeometryElement geomElem = element.get_Geometry(opt);
+        if (geomElem == null) return null;
+
+        foreach (GeometryObject obj in geomElem)
+        {
+            if (obj is Solid s && s.Volume > 0.0001) return s;
+            if (obj is GeometryInstance inst)
+            {
+                foreach (GeometryObject instObj in inst.GetInstanceGeometry())
+                {
+                    if (instObj is Solid instSolid && instSolid.Volume > 0.0001) return instSolid;
+                }
+            }
+        }
+        return null;
+    }
+}
+```
+
+---
+
+## 15. Command 09 — Persistent View Filter Creation & Overrides
+
+**File:** [`CreateViewFilterCommand.cs`](Commands/CreateViewFilterCommand.cs)
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.Manual)]
+public class CreateViewFilterCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var doc = commandData.Application.ActiveUIDocument.Document;
+        var activeView = doc.ActiveView;
+
+        if (!activeView.AreGraphicsOverridesAllowed())
+        {
+            TaskDialog.Show("Error", "Active view does not support graphic overrides.");
+            return Result.Cancelled;
+        }
+
+        // 1. Define target categories
+        ICollection<ElementId> targetCategories = new List<ElementId>
+        {
+            new ElementId(BuiltInCategory.OST_Walls)
+        };
+
+        // 2. Build Rule Criteria: Walls where Comments contains 'Fire'
+        ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+        FilterRule rule = ParameterFilterRuleFactory.CreateContainsRule(commentsParamId, "Fire", false);
+        ElementParameterFilter criteria = new ElementParameterFilter(rule);
+
+        // 3. Create persistent ParameterFilterElement in database
+        using (Transaction t = new Transaction(doc, "Create and Apply View Filter"))
+        {
+            t.Start();
+
+            ParameterFilterElement filterElement = ParameterFilterElement.Create(
+                doc, 
+                "Walls - Fire Safety Check", 
+                targetCategories, 
+                criteria);
+
+            // 4. Add Filter to Active View
+            if (!activeView.IsFilterApplied(filterElement.Id))
+            {
+                activeView.AddFilter(filterElement.Id);
+            }
+
+            // 5. Apply Red Line Graphic Overrides
+            OverrideGraphicSettings overrideSettings = new OverrideGraphicSettings();
+            overrideSettings.SetProjectionLineColor(new Color(255, 0, 0));
+            overrideSettings.SetProjectionLineWeight(5);
+
+            activeView.SetFilterOverrides(filterElement.Id, overrideSettings);
+            activeView.SetFilterVisibility(filterElement.Id, true);
+
+            t.Commit();
+        }
+
+        TaskDialog.Show("Success", "View Filter 'Walls - Fire Safety Check' created and applied with Red lines.");
+        return Result.Succeeded;
+    }
+}
+```
+
+---
+
+## 16. Common Mistakes & Wrong Mental Models
+
+### Mistake 1: Filtering via C# LINQ Instead of Native Database Rules
+- ❌ **Wrong:** Retrieving all walls into memory with `collector.ToElements()` and filtering with `.Where(w => w.LookupParameter("Length").AsDouble() >= 10)`.
+- ✔ **Correct:** Use `ParameterFilterRuleFactory` and `ElementParameterFilter` to evaluate the rule in native C++ memory.
+- 🛠️ **API Approach:** Pass `ElementParameterFilter` into `collector.WherePasses(ruleFilter)`.
+
+### Mistake 2: Forgetting to Exclude the Target Element in Collision Tests
+- ❌ **Wrong:** Applying `ElementIntersectsElementFilter(targetWall)` without an `ExclusionFilter`.
+- ✔ **Correct:** The target element will intersect its own 3D solid geometry and falsely report a clash with itself.
+- 🛠️ **API Approach:** Chain `.WherePasses(new ExclusionFilter(new List<ElementId> { targetWall.Id }))`.
+
+### Mistake 3: Passing Un-Transformed Solids from Linked Models
+- ❌ **Wrong:** Passing raw solid extracted from a linked element directly into `ElementIntersectsSolidFilter` in the host model.
+- ✔ **Correct:** Linked elements live in their own local coordinate space. The solid must be transformed to host coordinates.
+- 🛠️ **API Approach:** Apply `SolidUtils.CreateTransformed(linkedSolid, linkInstance.GetTotalTransform())`.
+
+### Mistake 4: Missing Quick Filter Pre-Pass Before 3D Solid Clash Checks
+- ❌ **Wrong:** Applying `ElementIntersectsSolidFilter` directly on a collector of all elements in the project.
+- ✔ **Correct:** 3D Solid tests are slow filters. They will freeze large models if executed across 100,000+ elements.
+- 🛠️ **API Approach:** Always chain a `BoundingBoxIntersectsFilter` first to eliminate non-proximate objects.
+
+### Mistake 5: Assuming `ElementId(BuiltInParameter.XYZ)` Returns a `Parameter`
+- ❌ **Wrong:** Expecting `new ElementId(BuiltInParameter.CURVE_ELEM_LENGTH)` to hold the length value of a wall.
+- ✔ **Correct:** `ElementId` is only the column address for database rules. To read values, use `element.get_Parameter(BuiltInParameter.XYZ)`.
+- 🛠️ **API Approach:** Use `ElementId` for rules, and `Parameter` objects for instance inspection.
+
+---
+
+## 17. Real-World BIM Recipes & Practical Scenarios
+
+### Scenario 1: Pre-Filtering MEP Clashes Against Structural Beams
+```csharp
+// 1. Quick Category Filter
+ElementCategoryFilter beamFilter = new ElementCategoryFilter(BuiltInCategory.OST_StructuralFraming);
+
+// 2. Quick AABB Bounding Box Filter around target Duct
+Outline ductOutline = new Outline(ductBbox.Min, ductBbox.Max);
+BoundingBoxIntersectsFilter bboxFilter = new BoundingBoxIntersectsFilter(ductOutline);
+
+// 3. Exact 3D Solid Clash Filter
+ElementIntersectsElementFilter clashFilter = new ElementIntersectsElementFilter(targetDuct);
+
+// Execute Chained Query
+IList<Element> clashingBeams = new FilteredElementCollector(doc)
+    .WherePasses(beamFilter)            // 1. Quick Category
+    .WherePasses(bboxFilter)            // 2. Quick Bounding Box
+    .WherePasses(clashFilter)           // 3. Precise 3D Collision
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+---
+
+### Scenario 2: Finding Non-Compliant Fire-Rated Walls
+```csharp
+ElementId fireRatingParamId = new ElementId(BuiltInParameter.WALL_ATTR_FIRE_RATING);
+FilterRule noFireRatingRule = ParameterFilterRuleFactory.CreateEqualsRule(fireRatingParamId, string.Empty, false);
+
+IList<Element> unratedWalls = new FilteredElementCollector(doc)
+    .OfCategory(BuiltInCategory.OST_Walls)
+    .WhereElementIsNotElementType()
+    .WherePasses(new ElementParameterFilter(noFireRatingRule))
+    .ToElements();
+```
+
+---
+
+## 18. Final Cheat Sheet & Developer's Mindset
+
+| Goal / Query | API Class / Method | Performance |
+| :--- | :--- | :--- |
+| **Filter by Category** | `.OfCategory(BuiltInCategory.OST_Walls)` | ⚡ Ultra Fast (Quick) |
+| **Filter by C# Class** | `.OfClass(typeof(Wall))` | ⚡ Ultra Fast (Quick) |
+| **Filter Multiple Categories** | `new ElementMulticategoryFilter(categoriesList)` | ⚡ Ultra Fast (Quick) |
+| **Exclude IDs** | `new ExclusionFilter(idsToExclude)` | ⚡ Ultra Fast (Quick) |
+| **Bounding Box Spatial Query** | `new BoundingBoxIntersectsFilter(outline)` | ⚡ Fast (Quick) |
+| **Evaluate Parameter Condition** | `new ElementParameterFilter(rule)` | 🐢 Heavy (Slow) |
+| **Filter by Level** | `new ElementLevelFilter(levelId)` | 🐢 Heavy (Slow) |
+| **3D Physical Clash (Host)** | `new ElementIntersectsElementFilter(targetElement)` | 🧊 Exact Solid (Slow) |
+| **3D Clearance / Transformed Clash** | `new ElementIntersectsSolidFilter(solid)` | 🧊 Exact Solid (Slow) |
+| **Create Persistent View Filter** | `ParameterFilterElement.Create(doc, name, cats, filter)` | ✔ Database Element (`Transaction`) |
+
+### The Developer's Core Mindset
+```
+1. What am I searching for? (Categories / Classes)
+       │
+       ▼
+2. Narrow the search space with Quick Filters (Bounding Box / Exclusion)
+       │
+       ▼
+3. Compose rules with LogicalAnd / LogicalOr in unmanaged C++ memory
+       │
+       ▼
+4. Execute Slow Filters (Parameter Rules / 3D Solid Geometry) on candidate set
+       │
+       ▼
+5. Output final matching elements into .NET memory
+```
