@@ -1,53 +1,37 @@
-﻿
+using System;
+using System.Text;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
-using System;
-using System.Reflection.Metadata;
-using System.Security.Cryptography;
-using System.Text;
-using System.Xml.Linq;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace RevitApiSamples.Samples.Transform.Commands
 {
     // ============================================================================
-    // Calculate Direction And End Point Command
+    // Calculate Direction And End Point Command (Command 11)
     //
-    // This command demonstrates 4 different methods to calculate the direction
-    // and end point of an element based on Location and orientation.
+    // Demonstrates how Family Creation & Placement Architecture governs the
+    // retrieval and calculation of 3D direction and end points across different
+    // Revit element categories and hosting types.
     //
-    // The 4 Methods:
+    // The 4 Core Methods:
     //
-    // Method 01: HandOrientation / Face Orientation
-    //       └─ Direct vector from Revit (Loadable Family only)
+    // Method 01: HandOrientation & 3D Transform Matrix Basis
+    //       └─ Direct 3D vectors from Revit (Loadable Family: Doors, Equipment, Face-Hosted)
     //
-    // Method 02: End - Start .Normalize()
-    //       └─ From LocationCurve (Wall, Beam, Pipe)
-    //          Works with both Loadable & System Family
+    // Method 02: (End - Start).Normalize() from LocationCurve
+    //       └─ Direct 3D curve tangent (Linear System Families: Walls, Pipes, Ducts, Beams)
     //
-    // Method 03: Start + Rotation + Length
-    //       └─ From LocationPoint + Angle
-    //          Works with both Loadable & System Family
+    // Method 03: LocationPoint.Rotation (2D Plan Polar Fallback)
+    //       └─ Scalar angle θ around vertical axis: (cos θ, sin θ, 0)
+    //       └─ Limitation: Forces Z = 0; cannot represent 3D pitch/slope.
     //
-    // Method 04: Infeed + Outfeed + Z Direction
-    //       └─ Most detailed method with slope
-    //          Works with both Loadable & System Family
-    //          Infeed = distance before element
-    //          Outfeed = distance after element
-    //          Slope = vertical rise (independent of horizontal)
-    //
-    // Key Insight:
-    // Infeed & Outfeed are HORIZONTAL distances
-    // Slope is VERTICAL distance (INDEPENDENT)
-    //
-    // Formula for Method 04:
-    //
-    // EndPoint.X = Start.X + (Infeed + Length + Outfeed) × Cos(Rotation)
-    // EndPoint.Y = Start.Y + (Infeed + Length + Outfeed) × Sin(Rotation)
-    // EndPoint.Z = Start.Z + Slope
-    //
+    // Method 04: Parameterized 3D Elevation & Slope Reconstruction
+    //       └─ For Level-Hosted Point Families with Infeed (Z1) & Outfeed (Z2) parameters
+    //       └─ ΔZ = Z_out - Z_in
+    //       └─ sin(α) = ΔZ / Length,  cos(α) = sqrt(1 - sin²α)
+    //       └─ u_3D = (cos θ · cos α,  sin θ · cos α,  sin α)
+    //       └─ Explains why translating origin Z causes the "Double-Elevation Defect"
     // ============================================================================
 
     [Transaction(TransactionMode.ReadOnly)]
@@ -61,23 +45,15 @@ namespace RevitApiSamples.Samples.Transform.Commands
                 UIDocument uiDoc = uiApp.ActiveUIDocument;
                 Document doc = uiDoc.Document;
 
-                //=====================================================
-                // STEP 1: Select an Element
-                //=====================================================
-
+                // 1. Select an Element
                 Reference selRef = uiDoc.Selection.PickObject(
                     ObjectType.Element,
-                    "Select an element (FamilyInstance, Wall, Beam, etc.)");
+                    "Select an element (FamilyInstance, Wall, Beam, Pipe, etc.) to analyze 3D Direction & End Point");
 
                 Element element = doc.GetElement(selRef);
-
-                //=====================================================
-                // STEP 2: Identify Element Type
-                //=====================================================
+                if (element == null) return Result.Cancelled;
 
                 bool isLoadableFamily = (element is FamilyInstance);
-                bool isSystemFamily = !isLoadableFamily;
-
                 string familyType = isLoadableFamily ? "Loadable Family" : "System Family";
 
                 Location location = element.Location;
@@ -85,12 +61,11 @@ namespace RevitApiSamples.Samples.Transform.Commands
                 bool hasLocationCurve = (location is LocationCurve);
 
                 string locationType = hasLocationPoint ? "LocationPoint" :
-                                     hasLocationCurve ? "LocationCurve" : "Unknown";
+                                      hasLocationCurve ? "LocationCurve" : "Unknown";
 
-                XYZ startPoint = null;
+                XYZ? startPoint = null;
                 double rotation = 0;
 
-                // Extract start point and rotation
                 if (location is LocationPoint locPoint)
                 {
                     startPoint = locPoint.Point;
@@ -98,262 +73,149 @@ namespace RevitApiSamples.Samples.Transform.Commands
                 }
                 else if (location is LocationCurve locCurve)
                 {
-                    Curve curve = locCurve.Curve;
-                    startPoint = curve.GetEndPoint(0);
+                    startPoint = locCurve.Curve.GetEndPoint(0);
                 }
 
                 if (startPoint == null)
                 {
-                    TaskDialog.Show("Error", "Element has no valid location.");
+                    TaskDialog.Show("Error", "Selected element has no valid spatial location.");
                     return Result.Failed;
                 }
 
-                //=====================================================
-                // STEP 3: Calculate Direction & End Point Using All 4 Methods
-                //=====================================================
+                // 2. Calculate Direction & End Point Using the 4 Methods
+                XYZ? endPoint1 = null;  // Method 01 (HandOrientation / Matrix)
+                XYZ? endPoint2 = null;  // Method 02 (LocationCurve)
+                XYZ? endPoint3 = null;  // Method 03 (2D Polar)
+                XYZ? endPoint4 = null;  // Method 04 (Parameterized 3D Infeed/Outfeed)
 
-                XYZ endPoint1 = null;  // Method 01
-                XYZ endPoint2 = null;  // Method 02
-                XYZ endPoint3 = null;  // Method 03
-                XYZ endPoint4 = null;  // Method 04
+                double elementLength = 10.0; // Default 10 ft
 
-                // ═════════════════════════════════════════════════════════
-                // METHOD 01: HandOrientation
-                // ═════════════════════════════════════════════════════════
-                // ✓ Works with: LOADABLE FAMILY ONLY
-                // ✗ Does NOT work with: System Family
-                // ✗ Requires: FamilyInstance type (not System type)
-                // ✗ Location: Does NOT matter (Point or Curve)
-                // ═════════════════════════════════════════════════════════
-
+                // Method 01: HandOrientation & Transform Matrix
                 if (isLoadableFamily && element is FamilyInstance familyInstance)
                 {
-                    endPoint1 = Method01_HandOrientation(familyInstance);
+                    elementLength = TryGetLength(familyInstance, defaultLength: 10.0);
+                    endPoint1 = Method01_HandOrientation(familyInstance, startPoint, elementLength);
                 }
 
-                // ═════════════════════════════════════════════════════════
-                // METHOD 02: End - Start .Normalize()
-                // ═════════════════════════════════════════════════════════
-                // ✓ Works with: LOADABLE FAMILY + SYSTEM FAMILY
-                // ✓ Requires: LocationCurve ONLY
-                // ✗ Does NOT work with: LocationPoint
-                // Examples: Wall, Beam, Pipe, Curve-Based Elements
-                // ═════════════════════════════════════════════════════════
-
-                if (hasLocationCurve)
+                // Method 02: LocationCurve End - Start
+                if (hasLocationCurve && location is LocationCurve lc)
                 {
-                    endPoint2 = Method02_EndMinusStart(location as LocationCurve);
+                    elementLength = lc.Curve.Length;
+                    endPoint2 = lc.Curve.GetEndPoint(1);
                 }
 
-                // ═════════════════════════════════════════════════════════
-                // METHOD 03: Start + Rotation + Length
-                // ═════════════════════════════════════════════════════════
-                // ✓ Works with: LOADABLE FAMILY + SYSTEM FAMILY
-                // ✓ Requires: LocationPoint ONLY
-                // ✗ Does NOT work with: LocationCurve
-                // ✗ Limitation: No vertical slope (Z = 0 always)
-                // Examples: Door, Window, Furniture with rotation
-                // ═════════════════════════════════════════════════════════
-
+                // Method 03: 2D Polar Trigonometry
                 if (hasLocationPoint)
                 {
-                    double elementLength = 3.0;  // Example: 3 feet
                     endPoint3 = Method03_RotationAndLength(startPoint, rotation, elementLength);
                 }
 
-                // ═════════════════════════════════════════════════════════
-                // METHOD 04: Infeed + Outfeed + Z Direction (with Slope)
-                // ═════════════════════════════════════════════════════════
-                // ✓ Works with: LOADABLE FAMILY + SYSTEM FAMILY
-                // ✓ Requires: LocationPoint ONLY
-                // ✗ Does NOT work with: LocationCurve
-                // ✓ Advantage: Handles slope/elevation
-                // ✓ Includes: Infeed, Outfeed, Z Direction
-                // IMPORTANT: Infeed & Outfeed ≠ Slope (they are independent!)
-                // ═════════════════════════════════════════════════════════
-
+                // Method 04: Parameterized Elevation (Infeed / Outfeed Slope)
                 if (hasLocationPoint)
                 {
-                    double infeed = 0.5;       // 50cm before element
-                    double elementLength = 3.0; // 3m element
-                    double outfeed = 0.5;      // 50cm after element
-                    double slope = 1.5;        // 1.5m rise (Z direction)
+                    double infeedZ = startPoint.Z;
+                    double outfeedZ = startPoint.Z + 2.0; // Example: 2 ft elevation rise over length
 
-                    endPoint4 = Method04_InfeedOutfeedWithSlope(
-                        startPoint, rotation, infeed, elementLength, outfeed, slope);
+                    if (element is FamilyInstance fi)
+                    {
+                        infeedZ = fi.LookupParameter("ILUS_Infeed_Elevation")?.AsDouble() ?? infeedZ;
+                        outfeedZ = fi.LookupParameter("ILUS_Outfeed_Elevation")?.AsDouble() ?? outfeedZ;
+                    }
+
+                    endPoint4 = Method04_ParameterizedElevationWithSlope(
+                        startPoint, rotation, elementLength, infeedZ, outfeedZ);
                 }
 
-                //=====================================================
-                // STEP 4: Build Report
-                //=====================================================
-
+                // 3. Build Detailed Report
                 StringBuilder sb = new StringBuilder();
 
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("CALCULATE DIRECTION AND END POINT - ALL 4 METHODS");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
+                sb.AppendLine("=======================================================");
+                sb.AppendLine("3D DIRECTION & END POINT ANALYSIS (4 METHODS)");
+                sb.AppendLine("=======================================================");
+                sb.AppendLine($"Element Name     : {element.Name}");
+                sb.AppendLine($"Element ID       : {element.Id}");
+                sb.AppendLine($"Category         : {element.Category?.Name ?? "N/A"}");
+                sb.AppendLine($"Family Type      : {familyType}");
+                sb.AppendLine($"Location Type    : {locationType}");
+                sb.AppendLine($"Start Point      : {PointToString(startPoint)} ft");
+                sb.AppendLine($"Length           : {elementLength:F3} ft ({UnitUtils.ConvertFromInternalUnits(elementLength, UnitTypeId.Meters):F2} m)");
                 sb.AppendLine();
 
-                sb.AppendLine("📋 ELEMENT INFORMATION:");
-                sb.AppendLine("───────────────────────────────────────────────────────");
-                sb.AppendLine($"Element Name         : {element.Name}");
-                sb.AppendLine($"Element ID           : {element.Id}");
-                sb.AppendLine($"Category             : {element.Category.Name}");
-                sb.AppendLine();
-                sb.AppendLine($"🔹 Family Type       : {familyType}");
-                sb.AppendLine($"🔹 Location Type     : {locationType}");
-                sb.AppendLine();
-
-                sb.AppendLine("START POINT & ROTATION:");
-                sb.AppendLine("───────────────────────────────────────────────────────");
-                sb.AppendLine($"Start Point     : {PointToString(startPoint)}");
-                sb.AppendLine($"Rotation (rad)  : {rotation:F6}");
-                sb.AppendLine($"Rotation (deg)  : {RadianToDegree(rotation):F2}°");
-                sb.AppendLine();
-
-                sb.AppendLine("DIRECTION COMPONENTS:");
-                sb.AppendLine("───────────────────────────────────────────────────────");
-                double dirX = Math.Cos(rotation);
-                double dirY = Math.Sin(rotation);
-                sb.AppendLine($"Cos(Rotation)   : {dirX:F4}  ← X Direction");
-                sb.AppendLine($"Sin(Rotation)   : {dirY:F4}  ← Y Direction");
-                sb.AppendLine();
-
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("METHOD 01: HandOrientation");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("✓ Compatible with : LOADABLE FAMILY ONLY");
-                sb.AppendLine("✗ NOT compatible  : System Family");
-                sb.AppendLine("✓ Location Type   : Any (Point or Curve)");
-                sb.AppendLine("✓ Advantage       : Direct vector from Revit (no calculation)");
-                sb.AppendLine();
-                if (endPoint1 != null)
+                // Section 1
+                sb.AppendLine("METHOD 01: HandOrientation & Transform Matrix");
+                sb.AppendLine("-------------------------------------------------------");
+                sb.AppendLine("• Compatible : Loadable Families (FamilyInstance)");
+                sb.AppendLine("• Advantage  : Directly reflects 3D basis vectors and UI flips");
+                if (isLoadableFamily && element is FamilyInstance fiInstance)
                 {
-                    sb.AppendLine($"✓ Direction    : {PointToString(endPoint1)}");
-                }
-                else if (isLoadableFamily)
-                {
-                    sb.AppendLine("⚠ Element is Loadable Family but HandOrientation is null");
+                    XYZ hand = fiInstance.HandOrientation;
+                    XYZ facing = fiInstance.FacingOrientation;
+                    Autodesk.Revit.DB.Transform tf = fiInstance.GetTotalTransform();
+                    sb.AppendLine($"  Hand Vector   : {PointToString(hand)}");
+                    sb.AppendLine($"  Facing Vector : {PointToString(facing)}");
+                    sb.AppendLine($"  Transform Z   : {PointToString(tf.BasisZ)} (Up/Normal)");
+                    sb.AppendLine($"  End Point     : {PointToString(endPoint1)} ft");
                 }
                 else
                 {
-                    sb.AppendLine($"✗ NOT AVAILABLE - Element is {familyType}");
+                    sb.AppendLine("  ✗ N/A — Element is a System Family (No FamilyInstance transform)");
                 }
                 sb.AppendLine();
 
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("METHOD 02: End - Start .Normalize()");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("✓ Compatible with : LOADABLE FAMILY + SYSTEM FAMILY");
-                sb.AppendLine("✓ Location Type   : LocationCurve ONLY");
-                sb.AppendLine("✗ NOT for         : LocationPoint");
-                sb.AppendLine("✓ Advantage       : Works with both Loadable & System");
-                sb.AppendLine("  Examples       : Wall, Beam, Pipe, Curve-Based Elements");
-                sb.AppendLine();
-                if (endPoint2 != null)
+                // Section 2
+                sb.AppendLine("METHOD 02: LocationCurve (P2 - P1).Normalize()");
+                sb.AppendLine("-------------------------------------------------------");
+                sb.AppendLine("• Compatible : Linear Elements (Walls, Pipes, Ducts, Beams)");
+                sb.AppendLine("• Advantage  : True 3D spatial curve coordinates in world space");
+                if (hasLocationCurve && location is LocationCurve lcurve)
                 {
-                    sb.AppendLine($"✓ Direction    : {PointToString(endPoint2)}");
-                    sb.AppendLine($"  Formula    : Direction = (Curve.End - Curve.Start).Normalize()");
-                }
-                else if (hasLocationCurve)
-                {
-                    sb.AppendLine("⚠ Element has LocationCurve but calculation failed");
+                    XYZ dir2 = (lcurve.Curve.GetEndPoint(1) - lcurve.Curve.GetEndPoint(0)).Normalize();
+                    sb.AppendLine($"  3D Direction  : {PointToString(dir2)}");
+                    sb.AppendLine($"  End Point     : {PointToString(endPoint2)} ft");
                 }
                 else
                 {
-                    sb.AppendLine($"✗ NOT AVAILABLE - Element has {locationType}, needs LocationCurve");
+                    sb.AppendLine("  ✗ N/A — Element is Point-Based (No LocationCurve)");
                 }
                 sb.AppendLine();
 
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("METHOD 03: Start + Rotation + Length");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("✓ Compatible with : LOADABLE FAMILY + SYSTEM FAMILY");
-                sb.AppendLine("✓ Location Type   : LocationPoint ONLY");
-                sb.AppendLine("✗ NOT for         : LocationCurve");
-                sb.AppendLine("✓ Advantage       : Generic, works for any element with rotation");
-                sb.AppendLine("✗ Limitation      : Ignores vertical slope (Z = 0)");
-                sb.AppendLine("  Examples       : Door, Window, Furniture, Inclined Column");
-                sb.AppendLine();
-                if (endPoint3 != null)
+                // Section 3
+                sb.AppendLine("METHOD 03: 2D Polar Trigonometry (cos θ, sin θ, 0)");
+                sb.AppendLine("-------------------------------------------------------");
+                sb.AppendLine("• Compatible : LocationPoint Elements");
+                sb.AppendLine("• Limitation : 1D Plan rotation only — Z is hardcoded to 0");
+                if (hasLocationPoint)
                 {
-                    sb.AppendLine($"✓ End Point    : {PointToString(endPoint3)}");
-                    sb.AppendLine($"  Parameters :");
-                    sb.AppendLine($"    • Length  : 3.0 ft");
-                    sb.AppendLine($"  Formula    :");
-                    sb.AppendLine($"    X = Start.X + Length × Cos(Rotation) = {endPoint3.X:F4}");
-                    sb.AppendLine($"    Y = Start.Y + Length × Sin(Rotation) = {endPoint3.Y:F4}");
-                    sb.AppendLine($"    Z = Start.Z (no slope) = {endPoint3.Z:F4}");
-                }
-                else if (hasLocationPoint)
-                {
-                    sb.AppendLine("⚠ Element has LocationPoint but calculation failed");
+                    double dirX = Math.Cos(rotation);
+                    double dirY = Math.Sin(rotation);
+                    sb.AppendLine($"  Rotation      : {rotation:F4} rad ({RadianToDegree(rotation):F1}°)");
+                    sb.AppendLine($"  2D Direction  : ({dirX:F4}, {dirY:F4}, 0.0000)");
+                    sb.AppendLine($"  End Point     : {PointToString(endPoint3)} ft");
                 }
                 else
                 {
-                    sb.AppendLine($"✗ NOT AVAILABLE - Element has {locationType}, needs LocationPoint");
+                    sb.AppendLine("  ✗ N/A — Element is Curve-Based");
                 }
                 sb.AppendLine();
 
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("METHOD 04: Infeed + Outfeed + Z Direction");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("✓ Compatible with : LOADABLE FAMILY + SYSTEM FAMILY");
-                sb.AppendLine("✓ Location Type   : LocationPoint ONLY");
-                sb.AppendLine("✗ NOT for         : LocationCurve");
-                sb.AppendLine("✓ Advantage       : Most detailed (handles slope correctly)");
-                sb.AppendLine("✓ Includes        : Infeed, Outfeed, Z Direction (slope)");
-                sb.AppendLine("  Examples       : Inclined Stairs, Ramps, Sloped Elements");
-                sb.AppendLine();
-                if (endPoint4 != null)
+                // Section 4
+                sb.AppendLine("METHOD 04: Parameterized 3D Elevation (Infeed/Outfeed Slope)");
+                sb.AppendLine("-------------------------------------------------------");
+                sb.AppendLine("• Compatible : Level-Hosted Point Families with Slope Parameters");
+                sb.AppendLine("• Advantage  : Reconstructs true 3D conveyor trajectory without double elevation");
+                if (hasLocationPoint)
                 {
-                    sb.AppendLine($"✓ End Point    : {PointToString(endPoint4)}");
-                    sb.AppendLine();
-                    sb.AppendLine($"  Parameters :");
-                    sb.AppendLine($"    • Infeed        : 0.50 ft (distance BEFORE element - horizontal)");
-                    sb.AppendLine($"    • Length        : 3.00 ft (element length)");
-                    sb.AppendLine($"    • Outfeed       : 0.50 ft (distance AFTER element - horizontal)");
-                    sb.AppendLine($"    • Slope (Z)     : 1.50 ft (vertical rise - INDEPENDENT!)");
-                    sb.AppendLine($"    • Total Horiz   : 4.00 ft (Infeed + Length + Outfeed)");
-                    sb.AppendLine();
-                    sb.AppendLine($"  Formula (IMPORTANT: Slope is INDEPENDENT):");
-                    sb.AppendLine($"    Horizontal Distance = Infeed + Length + Outfeed = 4.00 ft");
-                    sb.AppendLine($"    X = Start.X + HorizDist × Cos(Rotation)");
-                    sb.AppendLine($"      = {startPoint.X:F4} + 4.00 × {dirX:F4} = {endPoint4.X:F4}");
-                    sb.AppendLine($"    Y = Start.Y + HorizDist × Sin(Rotation)");
-                    sb.AppendLine($"      = {startPoint.Y:F4} + 4.00 × {dirY:F4} = {endPoint4.Y:F4}");
-                    sb.AppendLine($"    Z = Start.Z + Slope (NOT distributed over horizontal distance!)");
-                    sb.AppendLine($"      = {startPoint.Z:F4} + 1.50 = {endPoint4.Z:F4}");
-                }
-                else if (hasLocationPoint)
-                {
-                    sb.AppendLine("⚠ Element has LocationPoint but calculation failed");
+                    sb.AppendLine($"  End Point     : {PointToString(endPoint4)} ft");
+                    sb.AppendLine("  *Note: Rise (ΔZ) is handled via family instance parameters,");
+                    sb.AppendLine("         NOT by translating the Level-hosted insertion point in Z.");
                 }
                 else
                 {
-                    sb.AppendLine($"✗ NOT AVAILABLE - Element has {locationType}, needs LocationPoint");
+                    sb.AppendLine("  ✗ N/A — Element is Curve-Based");
                 }
                 sb.AppendLine();
 
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("KEY INSIGHT: Infeed & Outfeed vs Slope");
-                sb.AppendLine("═══════════════════════════════════════════════════════");
-                sb.AppendLine("❌ WRONG:");
-                sb.AppendLine("   Z = Start.Z + (Infeed + Length + Outfeed) × Slope");
-                sb.AppendLine("   └─ This multiplies horizontal distance by vertical slope!");
-                sb.AppendLine("   └─ Would give HUGE Z values (4.0 × 1.5 = 6.0 instead of 1.5)");
-                sb.AppendLine();
-                sb.AppendLine("✓ CORRECT:");
-                sb.AppendLine("   X = Start.X + (Infeed+Length+Outfeed) × Cos(Rotation)");
-                sb.AppendLine("   Y = Start.Y + (Infeed+Length+Outfeed) × Sin(Rotation)");
-                sb.AppendLine("   Z = Start.Z + Slope  ← Slope is COMPLETELY SEPARATE!");
-                sb.AppendLine();
-                sb.AppendLine("Infeed & Outfeed = HORIZONTAL distances (X & Y only)");
-                sb.AppendLine("Slope = VERTICAL distance (Z only, independent)");
-                sb.AppendLine();
-
-                TaskDialog.Show("Calculate Direction And End Point - All 4 Methods", sb.ToString());
-
+                TaskDialog.Show("Calculate Direction & End Point Result", sb.ToString());
                 return Result.Succeeded;
             }
             catch (Autodesk.Revit.Exceptions.OperationCanceledException)
@@ -367,99 +229,61 @@ namespace RevitApiSamples.Samples.Transform.Commands
             }
         }
 
-        //=====================================================
-        // METHOD 01: HandOrientation
-        //=====================================================
-
-        private XYZ Method01_HandOrientation(FamilyInstance familyInstance)
+        private XYZ Method01_HandOrientation(FamilyInstance familyInstance, XYZ startPoint, double length)
         {
-            // Direct vector from Revit
-            // No calculation needed
-            return familyInstance.HandOrientation;
+            XYZ hand = familyInstance.HandOrientation;
+            return startPoint + (hand * length);
         }
-
-        //=====================================================
-        // METHOD 02: End - Start
-        //=====================================================
-
-        private XYZ Method02_EndMinusStart(LocationCurve locCurve)
-        {
-            Curve curve = locCurve.Curve;
-
-            XYZ startPoint = curve.GetEndPoint(0);
-            XYZ endPoint = curve.GetEndPoint(1);
-
-            // Direction = (End - Start).Normalize()
-            XYZ direction = endPoint.Subtract(startPoint).Normalize();
-
-            return direction;
-        }
-
-        //=====================================================
-        // METHOD 03: Start + Rotation + Length
-        //=====================================================
 
         private XYZ Method03_RotationAndLength(XYZ startPoint, double rotation, double length)
         {
-            // Calculate direction from angle
-            double directionX = Math.Cos(rotation);
-            double directionY = Math.Sin(rotation);
-            double directionZ = 0;  // Horizontal only
+            double dirX = Math.Cos(rotation);
+            double dirY = Math.Sin(rotation);
 
-            // Calculate end point
-            XYZ endPoint = new XYZ(
-                startPoint.X + length * directionX,
-                startPoint.Y + length * directionY,
-                startPoint.Z + directionZ
-            );
-
-            return endPoint;
+            return new XYZ(
+                startPoint.X + length * dirX,
+                startPoint.Y + length * dirY,
+                startPoint.Z);
         }
 
-        //=====================================================
-        // METHOD 04: Infeed + Outfeed + Z Direction (with Slope)
-        //=====================================================
-
-        private XYZ Method04_InfeedOutfeedWithSlope(
+        private XYZ Method04_ParameterizedElevationWithSlope(
             XYZ startPoint,
             double rotation,
-            double infeed,
-            double elementLength,
-            double outfeed,
-            double slope)
+            double length,
+            double infeedZ,
+            double outfeedZ)
         {
-            // STEP 1: Calculate total horizontal distance
-            // (Infeed and Outfeed are HORIZONTAL only)
-            double totalHorizontalDistance = infeed + elementLength + outfeed;
+            double deltaZ = outfeedZ - infeedZ;
+            double sinAlpha = Math.Max(-1.0, Math.Min(1.0, deltaZ / length));
+            double cosAlpha = Math.Sqrt(1.0 - sinAlpha * sinAlpha);
 
-            // STEP 2: Calculate direction from angle
-            double directionX = Math.Cos(rotation);
-            double directionY = Math.Sin(rotation);
+            double dirX = Math.Cos(rotation);
+            double dirY = Math.Sin(rotation);
 
-            // STEP 3: Calculate end point
-            // NOTE: Slope is INDEPENDENT from horizontal distance!
-            XYZ endPoint = new XYZ(
-                startPoint.X + totalHorizontalDistance * directionX,
-                startPoint.Y + totalHorizontalDistance * directionY,
-                startPoint.Z + slope  // Slope is separate!
-            );
+            double horizontalRun = length * cosAlpha;
 
-            return endPoint;
+            return new XYZ(
+                startPoint.X + horizontalRun * dirX,
+                startPoint.Y + horizontalRun * dirY,
+                startPoint.Z + deltaZ);
         }
 
-        //=====================================================
-        // Helper Methods
-        //=====================================================
-
-        private string PointToString(XYZ pt)
+        private double TryGetLength(FamilyInstance fi, double defaultLength)
         {
-            if (pt == null) return "N/A";
-            return $"({pt.X:F4}, {pt.Y:F4}, {pt.Z:F4})";
+            string[] paramNames = { "Length", "Conveyor_Length", "Span", "Cut Length" };
+            foreach (string name in paramNames)
+            {
+                Parameter p = fi.LookupParameter(name);
+                if (p != null && p.StorageType == StorageType.Double && p.AsDouble() > 0.001)
+                    return p.AsDouble();
+            }
+            return defaultLength;
         }
 
-        private double RadianToDegree(double radians)
-        {
-            return radians * (180.0 / Math.PI);
-        }
+        private string PointToString(XYZ? pt) =>
+            pt != null ? $"({pt.X:F3}, {pt.Y:F3}, {pt.Z:F3})" : "N/A";
+
+        private double RadianToDegree(double radians) =>
+            radians * (180.0 / Math.PI);
     }
 }
