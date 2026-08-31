@@ -116,6 +116,7 @@ The following table lists the **5 educational Commands** currently implemented i
 | **03** | [`CollectViewsCommand.cs`](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/Views/Commands/CollectViewsCommand.cs) | Document-Wide View Collection | `FilteredElementCollector(doc).OfClass(typeof(View))` | Why Views can be collected as Elements, and why the broad collection contains both normal views and view templates. |
 | **04** | [`CollectViewsByTypeCommand.cs`](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/Views/Commands/CollectViewsByTypeCommand.cs) | Specific & Usable View Filtering | `view.ViewType == ViewType.FloorPlan`, `!view.IsTemplate` | How to filter for usable project views of a specific kind while excluding View Templates. |
 | **05** | [`GetViewPropertiesCommand.cs`](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/Views/Commands/GetViewPropertiesCommand.cs) | In-Depth View Property Inspection | `view.ViewTemplateId`, `view.GenLevel`, `doc.GetElement(...)` | How to inspect common properties, identify assigned view templates, and safely query associated levels. |
+| **06** | [`CreateStructuralPlanViewCommand.cs`](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/Views/Commands/CreateStructuralPlanViewCommand.cs) | Programmatic View Creation & Setup | `ViewPlan.Create`, `ViewFamilyType`, `Level`, `Transaction` | How to construct a new structural plan view with custom name, scale, and detail level. |
 
 ---
 
@@ -507,8 +508,8 @@ View
 │      └── false  ──►  Normal View
 │
 └── ViewTemplateId
-       ├── ValidElementId    ──►  Uses a Template (Properties may be locked)
-       └── InvalidElementId  ──►  No Template (Properties freely editable)
+       ├── Valid Positive ElementId (e.g. 458921) ──► Uses a Template (Properties may be locked)
+       └── InvalidElementId (Value = -1)          ──► No Template (Properties freely editable)
 ```
 
 ```csharp
@@ -529,12 +530,45 @@ else
 }
 ```
 
+---
+
+### 🔢 Deep Dive: What is `ElementId.InvalidElementId` Numerically?
+
+A common question for developers is: **Why don't we check `if (view.ViewTemplateId != null)`?**
+
+In Revit's unmanaged C++ database kernel, every valid database entity has a **positive integer ID** (e.g. `124501`, `458921`). When a relation or foreign key does NOT exist, Revit represents "no element" using a special sentinel value: **`-1`**.
+
+In the C# .NET wrapper:
+* `ElementId.InvalidElementId` is a static constant where:
+  * In **Revit 2024 / 2025 (`net8.0`)**: `ElementId.InvalidElementId.Value == -1L` (64-bit integer).
+  * In **Revit 2023 and earlier**: `ElementId.InvalidElementId.IntegerValue == -1` (32-bit integer).
+* Because `ElementId` is a class/struct, Revit properties that return an ID (like `view.ViewTemplateId`, `element.LevelId`, `element.GetTypeId()`) will **never return `null`**. Instead, they return an `ElementId` instance whose internal number is `-1`.
+
+#### Numerical Comparison Table:
+
+| Scenario | Actual `templateId` Value | Evaluated Expression | Boolean Result | Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| **View has NO template** | `ElementId(-1)` | `ElementId(-1) != ElementId(-1)` | `false` | **Branch `else` executes:** View is unconstrained. |
+| **View HAS template assigned** | `ElementId(458921)` | `ElementId(458921) != ElementId(-1)` | `true` | **Branch `if` executes:** View is governed by template #458921. |
+
+```mermaid
+flowchart TD
+    Query["ElementId templateId = view.ViewTemplateId;"]
+    
+    Query --> Check{"templateId.Value != -1L\n(templateId != ElementId.InvalidElementId)"}
+    
+    Check -->|true (e.g. 458921)| HasTemplate["HAS TEMPLATE\n- doc.GetElement(templateId) returns the View Template\n- Some view properties are locked"]
+    Check -->|false (-1)| NoTemplate["NO TEMPLATE\n- Returns ElementId.InvalidElementId (-1)\n- View properties are freely editable"]
+```
+
+---
+
 ### Why This Distinction Matters When Modifying View Properties
 
 If you write code to change a view property (such as `view.Scale = 50;` or `view.DetailLevel = ViewDetailLevel.Fine;`), the operation will throw an exception or fail silently if that view is assigned to a `ViewTemplateId` where that property is locked by the template!
 
 To safely modify properties programmatically:
-1. Check `view.ViewTemplateId`.
+1. Check `view.ViewTemplateId != ElementId.InvalidElementId`.
 2. If assigned, determine whether to modify the template or temporarily unassign the template (`view.ViewTemplateId = ElementId.InvalidElementId;`).
 
 ---
@@ -824,16 +858,109 @@ Each Revit view type requires entirely different underlying geometric definition
 2. **Floor Plan $\longrightarrow$ 3D View**: A 3D view requires a 3D camera matrix (Eye position, Forward vector, Up vector, Perspective flag).
 3. **Floor Plan $\longrightarrow$ Schedule**: A Schedule is a tabular SQL-like query over element parameters, not a geometric projection.
 
-### The Correct Approach: Dedicated Creation Methods *(Future / Not Implemented Yet)*
+### The Correct Approach: Dedicated Creation Methods
 
-To get a different kind of view, you must **create a new view** using Revit's specialized static factory methods:
-- To create a Plan: `ViewPlan.Create(...)` *(Future / Not Implemented Yet)*
-- To create a Section: `ViewSection.CreateSection(...)` *(Future / Not Implemented Yet)*
-- To create a 3D View: `View3D.CreateIsometric(...)` *(Future / Not Implemented Yet)*
+To get a different kind of view, you must **create a new view** using Revit's specialized static factory methods inside an active `Transaction`:
+- **Plan Views (Floor / Structural / Ceiling):** `ViewPlan.Create(doc, viewFamilyTypeId, levelId)`
+- **Section Views:** `ViewSection.CreateSection(doc, viewFamilyTypeId, boundingBox)`
+- **3D Views:** `View3D.CreateIsometric(doc, viewFamilyTypeId)`
 
 ---
 
-## 17. Common Mistakes & Wrong Mental Models
+## 17. Command 06 — Programmatically Create a Structural Plan View
+
+**File:** [`CreateStructuralPlanViewCommand.cs`](file:///f:/02-programming/06-%20Revit%20API/projects/RevitApiSamples/RevitApiSamples/Samples/Views/Commands/CreateStructuralPlanViewCommand.cs)
+
+### Workflow & Architecture
+
+```mermaid
+flowchart TD
+    Step1["1. Find ViewFamilyType\n(ViewFamily.StructuralPlan)"] --> Step2["2. Find Target Level\n(e.g., Level 1)"]
+    Step2 --> Step3["3. Start Transaction\n(Transaction(doc, 'Create View'))"]
+    Step3 --> Step4["4. ViewPlan.Create\n(doc, structuralPlanType.Id, level.Id)"]
+    Step4 --> Step5["5. Set Properties\n- Name (Handle uniqueness)\n- Scale (1:50)\n- DetailLevel (Fine)\n- DisplayStyle (HLR)"]
+    Step5 --> Step6["6. Commit Transaction\n& Display Confirmation Dialog"]
+```
+
+### Complete Code Recipe
+
+```csharp
+[Transaction(TransactionMode.Manual)]
+public class CreateStructuralPlanViewCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var doc = commandData.Application.ActiveUIDocument.Document;
+
+        // 1. Find ViewFamilyType for Structural Plans
+        ViewFamilyType structuralPlanType = new FilteredElementCollector(doc)
+            .OfClass(typeof(ViewFamilyType))
+            .Cast<ViewFamilyType>()
+            .FirstOrDefault(vft => vft.ViewFamily == ViewFamily.StructuralPlan);
+
+        if (structuralPlanType == null)
+        {
+            TaskDialog.Show("Error", "No StructuralPlan ViewFamilyType found.");
+            return Result.Failed;
+        }
+
+        // 2. Find target Level
+        Level targetLevel = new FilteredElementCollector(doc)
+            .OfClass(typeof(Level))
+            .Cast<Level>()
+            .FirstOrDefault();
+
+        if (targetLevel == null)
+        {
+            TaskDialog.Show("Error", "No Levels found in project.");
+            return Result.Failed;
+        }
+
+        // 3. Open Transaction and Create View
+        ViewPlan newPlan = null;
+        string desiredName = $"Structural Plan - {targetLevel.Name} - Automated";
+
+        using (Transaction t = new Transaction(doc, "Create Structural Plan View"))
+        {
+            t.Start();
+
+            // Native Revit Factory Method
+            newPlan = ViewPlan.Create(doc, structuralPlanType.Id, targetLevel.Id);
+
+            // Handle Name Uniqueness
+            bool nameExists = new FilteredElementCollector(doc)
+                .OfClass(typeof(View))
+                .Cast<View>()
+                .Any(v => v.Name.Equals(desiredName, StringComparison.OrdinalIgnoreCase));
+
+            newPlan.Name = nameExists ? $"{desiredName} ({DateTime.Now:HHmmss})" : desiredName;
+
+            // Configure Graphic & Documentation Properties
+            newPlan.Scale = 50;                             // 1:50 Scale
+            newPlan.DetailLevel = ViewDetailLevel.Fine;       // Fine Detail
+            newPlan.DisplayStyle = DisplayStyle.HLR;        // Hidden Line Removal
+
+            t.Commit();
+        }
+
+        TaskDialog.Show("Success", $"Created View: {newPlan.Name} (Id: {newPlan.Id.Value})");
+        return Result.Succeeded;
+    }
+}
+```
+
+### Key Technical Details
+
+1. **Why `TransactionMode.Manual` is Required:**
+   Unlike read-only inspection commands (`TransactionMode.ReadOnly`), creating a view adds new records to the Revit database `.rvt` file. Any operation modifying the document must be executed inside an active `Transaction`.
+2. **Name Uniqueness Validation:**
+   In Revit, **no two views can have the exact same name**. If you attempt to assign an existing name (`newPlan.Name = "Level 1"`), Revit throws an `ArgumentException`. Always check with `FilteredElementCollector` or wrap in a try-catch block.
+3. **Scale Denominator:**
+   The `View.Scale` property represents the scale ratio denominator. Setting `newPlan.Scale = 50` creates a `1:50` drawing. Setting `newPlan.Scale = 100` creates a `1:100` drawing.
+
+---
+
+## 18. Common Mistakes & Wrong Mental Models
 
 ### Mistake 1: Thinking a View is Only a UI Window
 - ❌ **Wrong:** Assuming a View only exists when a user opens a tab on the screen.
