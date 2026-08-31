@@ -60,6 +60,8 @@ classDiagram
     }
     class ViewSchedule {
     }
+    class ViewSheet {
+    }
 
     Element <|-- View
     View <|-- ViewPlan
@@ -67,6 +69,7 @@ classDiagram
     View <|-- View3D
     View <|-- ViewDrafting
     View <|-- ViewSchedule
+    View <|-- ViewSheet
 ```
 
 Because a `View` is an `Element`:
@@ -207,45 +210,102 @@ View activeView = doc.ActiveView;
 ViewType viewType = activeView.ViewType;
 ```
 
-### Critical Distinction: `view.ViewType` vs `view.GetType()`
+### 1. View Element Taxonomy: C# Class Hierarchy vs. Revit ViewType
 
-One of the most frequent points of confusion for Revit API beginners is conflating the **C# runtime class** with the **Revit `ViewType` enum**.
+To fully understand how Revit organizes views, you must look at views from two complementary perspectives:
+
+#### 🔹 Perspective A: C# Class Hierarchy (`view.GetType()`)
+The .NET class inheritance tree inside `Autodesk.Revit.DB`:
 
 ```mermaid
 flowchart TD
-    ViewNode["View Element in Revit Database"]
+    ViewElem["View Element (Autodesk.Revit.DB.View)"]
     
-    ViewNode --> DotNet["C# CLR Runtime Type\n(view.GetType())"]
-    ViewNode --> RevitClassification["Revit Domain Classification\n(view.ViewType)"]
+    ViewElem --> V3D["View3D<br/>(3D view)"]
+    ViewElem --> VDraft["ViewDrafting<br/>(Drafting view)"]
+    ViewElem --> VPlan["ViewPlan<br/>(Plan view)"]
+    ViewElem --> VSec["ViewSection<br/>(Section / Elevation view)"]
+    ViewElem --> VSheet["ViewSheet<br/>(Sheet)"]
+```
+
+---
+
+#### 🔹 Perspective B: Revit Domain Classification (`view.ViewType` Enum)
+The functional role assigned by Revit's BIM engine:
+
+```mermaid
+flowchart TD
+    ViewElem2["View Element"]
     
-    DotNet --> ExampleClass["ViewPlan\n(System.Type in Autodesk.Revit.DB)"]
-    RevitClassification --> ExampleEnum["ViewType.FloorPlan\n(Enum in Autodesk.Revit.DB)"]
+    ViewElem2 --> VT_Plan["ViewType.FloorPlan"]
+    ViewElem2 --> VT_Elev["ViewType.Elevation"]
+    ViewElem2 --> VT_Detail["ViewType.Detail"]
+    ViewElem2 --> VT_Sec["ViewType.Section"]
+    ViewElem2 --> VT_3D["ViewType.ThreeD"]
+    ViewElem2 --> VT_Draft["ViewType.DraftingView"]
+    ViewElem2 --> VT_Sheet["ViewType.DrawingSheet"]
 ```
 
+---
+
+#### 🔹 Perspective C: Real-World Architectural Views to Revit API Mapping
+
+```mermaid
+flowchart TD
+    Root["View Element"]
+    
+    Root --> PlanGroup["Floor Plan"]
+    Root --> ElevGroup["Building Elevation"]
+    Root --> SecGroup["Building Section"]
+    
+    PlanGroup --> |"Implemented by C# Class"| C_Plan["ViewPlan (ViewType.FloorPlan)"]
+    ElevGroup --> |"Implemented by C# Class"| C_Elev["ViewSection (ViewType.Elevation)"]
+    SecGroup --> |"Implemented by C# Class"| C_Sec["ViewSection (ViewType.Section)"]
 ```
-View
-├── C# Runtime Class (view.GetType())
-│      └── ViewPlan
-│
-└── Revit ViewType (view.ViewType)
-       └── FloorPlan
-```
 
-#### Why are they different?
+---
 
-- **`view.GetType()`**: The underlying .NET class defined in `RevitAPI.dll` (e.g., `ViewPlan`, `ViewSection`, `View3D`, `ViewDrafting`, `ViewSchedule`). Multiple Revit view types share the **exact same C# class**.
-  - For example, `ViewType.FloorPlan`, `ViewType.CeilingPlan`, `ViewType.EngineeringPlan`, and `ViewType.AreaPlan` are all instances of the **`ViewPlan`** C# class.
-- **`view.ViewType`**: An enum property provided by the Revit engine that indicates the specific functional role of the view within Revit's BIM environment.
+### 2. The Surprising Truth: Why Building Elevations are `ViewSection` in C#
 
-### Comparison Table
+> [!NOTE]
+> **Why is there no `ViewElevation` class in the Revit API?**
+> Mathematically, in Revit's 3D geometric engine:
+> * A **Section** is a vertical cutting plane slicing through the building interior.
+> * An **Elevation** is *also* a vertical cutting plane positioned outside the building looking orthogonally at the exterior facade.
+> 
+> Because their camera math, projection matrices, and clipping volumes are 100% identical, Autodesk implemented both under the exact same C# class: **`ViewSection`**.
+> To distinguish them, you check `view.ViewType == ViewType.Elevation` vs `view.ViewType == ViewType.Section`.
+
+---
+
+### 3. Master Mapping Matrix: C# Classes $\leftrightarrow$ `ViewType` Enum $\leftrightarrow$ UI Views
+
+| C# Concrete Class (`view.GetType()`) | Revit `ViewType` Enum Value (`view.ViewType`) | Real-World Revit UI View | Primary Characteristics |
+| :--- | :--- | :--- | :--- |
+| **`ViewPlan`** | `ViewType.FloorPlan` | **Floor Plan** | Horizontal cut plane looking down, bound to a Level (`GenLevel`). |
+| **`ViewPlan`** | `ViewType.CeilingPlan` | **Reflected Ceiling Plan (RCP)** | Horizontal cut plane looking up, bound to a Level (`GenLevel`). |
+| **`ViewPlan`** | `ViewType.AreaPlan` | **Area Plan** | Plan view displaying gross/rentable area boundaries. |
+| **`ViewPlan`** | `ViewType.EngineeringPlan` | **Structural Plan** | Structural discipline plan view. |
+| **`ViewSection`** | `ViewType.Section` | **Building Section / Wall Section** | Vertical cutting slice inside the building. |
+| **`ViewSection`** | `ViewType.Elevation` | **Building Elevation / Interior Elevation** | Orthogonal side projection of facades/rooms. |
+| **`ViewSection`** | `ViewType.Detail` | **Callout / Detail Section** | High-magnification cropped detail section. |
+| **`View3D`** | `ViewType.ThreeD` | **3D Isometric / Perspective View** | Full 3D camera projection with eye/target points. |
+| **`ViewDrafting`** | `ViewType.DraftingView` | **Drafting View** | Pure 2D canvas for standard construction details. |
+| **`ViewSheet`** | `ViewType.DrawingSheet` | **Sheet (Titleblock)** | Printable documentation layout containing viewports. |
+| **`ViewSchedule`** | `ViewType.Schedule` | **Schedule / Quantification** | Tabular database query report. |
+
+---
+
+### 4. Comparison Summary
 
 | Concept | API Syntax | Question It Answers | Return Type | Examples |
 | :--- | :--- | :--- | :--- | :--- |
-| **Revit `ViewType`** | `view.ViewType` | "What functional role does this view perform in Revit?" | `Autodesk.Revit.DB.ViewType` (Enum) | `FloorPlan`, `CeilingPlan`, `Section`, `ThreeD`, `Legend` |
-| **C# Runtime Type** | `view.GetType().Name` | "What .NET class implements this object in memory?" | `System.Type` (Class) | `ViewPlan`, `ViewSection`, `View3D`, `ViewDrafting`, `ViewSchedule` |
+| **Revit `ViewType`** | `view.ViewType` | "What functional role does this view perform in Revit?" | `Autodesk.Revit.DB.ViewType` (Enum) | `FloorPlan`, `Elevation`, `Section`, `ThreeD`, `Detail` |
+| **C# Runtime Type** | `view.GetType().Name` | "What .NET class implements this object in memory?" | `System.Type` (Class) | `ViewPlan`, `ViewSection`, `View3D`, `ViewDrafting`, `ViewSheet` |
 
 > [!WARNING]
 > Do NOT attempt to check if a view is a floor plan by writing `if (view is ViewFloorPlan)` because **there is no class called `ViewFloorPlan` in the Revit API**. You must inspect `view.ViewType == ViewType.FloorPlan`.
+> Similarly, there is no `ViewElevation` class; you must inspect `view is ViewSection && view.ViewType == ViewType.Elevation`.
 
 ---
 
