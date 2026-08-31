@@ -96,7 +96,7 @@ flowchart TD
     Face["Host Top Face (PlanarFace)"] --> Norm["Face Normal Vector N = ComputeNormal(uv)"]
     RefDir["Reference Direction d_ref (Along Conveyor Axis)"] --> Proj["In-Plane Reference Vector:<br/>X_local = d_ref - (d_ref · N) N"]
     Norm --> BasisZ["Transform.BasisZ = N (Local Z-Axis)"]
-    Proj --> BasisX["Transform.BasisX = X_local / ||X_local||"]
+    Proj --> BasisX["Transform.BasisX = X_local / ‖X_local‖"]
     BasisZ --> BasisY["Transform.BasisY = BasisZ × BasisX"]
     BasisX --> BasisY
 ```
@@ -210,16 +210,16 @@ Use this programmatic pattern to determine the exact placement and direction ext
 
 ```mermaid
 flowchart TD
-    Start["Inspect FamilySymbol / FamilyInstance"] --> CheckFace{"FamilyPlacementType ==\nWorkPlaneBased?"}
+    Start["Inspect FamilySymbol / FamilyInstance"] --> CheckFace{"FamilyPlacementType ==<br/>WorkPlaneBased?"}
     
     CheckFace -- Yes --> FaceStrat["Strategy: FaceHosted<br/>• Read Face Normal N<br/>• Read Transform.BasisZ & BasisX"]
-    CheckFace -- No --> CheckCurve{"FamilyPlacementType ==\nCurveBased or CurveDriven?"}
+    CheckFace -- No --> CheckCurve{"FamilyPlacementType ==<br/>CurveBased or CurveDriven?"}
     
     CheckCurve -- Yes --> CurveStrat["Strategy: LineBased3D<br/>• Read LocationCurve.Curve<br/>• Direction = (P2 - P1).Normalize()"]
-    CheckCurve -- No --> CheckAdaptive{"FamilyPlacementType ==\nAdaptive?"}
+    CheckCurve -- No --> CheckAdaptive{"FamilyPlacementType ==<br/>Adaptive?"}
     
     CheckAdaptive -- Yes --> AdaptStrat["Strategy: AdaptiveMultiPoint<br/>• Read ReferencePoint.Position"]
-    CheckAdaptive -- No --> CheckParams{"OneLevelBased AND\nHas Elevation Parameters?"}
+    CheckAdaptive -- No --> CheckParams{"OneLevelBased AND<br/>Has Elevation Parameters?"}
     
     CheckParams -- Yes --> ParamStrat["Strategy: LevelHostedParameterized<br/>• Advance (X,Y) by L * cos(α)<br/>• Write Infeed/Outfeed Parameters<br/>• Do NOT elevate insertion Z"]
     CheckParams -- No --> FreeStrat["Strategy: StandardLevelOrFree3D<br/>• Read Transform.BasisX / HandOrientation"]
