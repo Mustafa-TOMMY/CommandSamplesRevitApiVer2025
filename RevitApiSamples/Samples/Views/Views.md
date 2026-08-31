@@ -491,12 +491,12 @@ flowchart TD
     ViewObj["View Object in Database"]
     
     ViewObj --> IsTemp{"view.IsTemplate"}
-    IsTemp -- "true" --> MasterTemplate["The View IS a Template itself\n(Cannot be opened as a model window)"]
-    IsTemp -- "false" --> NormalView["The View is a Normal Working View"]
+    IsTemp -->|"true"| MasterTemplate["The View IS a Template itself<br/>(Cannot be opened as a model window)"]
+    IsTemp -->|"false"| NormalView["The View is a Normal Working View"]
     
     NormalView --> HasTemplate{"view.ViewTemplateId"}
-    HasTemplate -- "ValidElementId" --> Controlled["Controlled by a View Template\n(e.g., Template Id = 123456)"]
-    HasTemplate -- "InvalidElementId" --> Independent["Independent View\n(No template assigned)"]
+    HasTemplate -->|"ValidElementId"| Controlled["Controlled by a View Template<br/>(e.g. Template Id = 123456)"]
+    HasTemplate -->|"InvalidElementId"| Independent["Independent View<br/>(No template assigned)"]
 ```
 
 ### The Two Properties Compared
@@ -555,10 +555,10 @@ In the C# .NET wrapper:
 flowchart TD
     Query["ElementId templateId = view.ViewTemplateId;"]
     
-    Query --> Check{"templateId.Value != -1L\n(templateId != ElementId.InvalidElementId)"}
+    Query --> Check{"Is templateId != InvalidElementId?<br/>(templateId.Value != -1L)"}
     
-    Check -->|true (e.g. 458921)| HasTemplate["HAS TEMPLATE\n- doc.GetElement(templateId) returns the View Template\n- Some view properties are locked"]
-    Check -->|false (-1)| NoTemplate["NO TEMPLATE\n- Returns ElementId.InvalidElementId (-1)\n- View properties are freely editable"]
+    Check -->|"true (e.g. 458921)"| HasTemplate["HAS TEMPLATE<br/>• doc.GetElement(templateId) returns View Template<br/>• Some properties may be locked"]
+    Check -->|"false (-1)"| NoTemplate["NO TEMPLATE<br/>• Returns ElementId.InvalidElementId (-1)<br/>• View properties are freely editable"]
 ```
 
 ---
