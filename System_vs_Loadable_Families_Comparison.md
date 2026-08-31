@@ -289,22 +289,52 @@ flowchart LR
 
 ---
 
-### Module 10 — Transform & Spatial Location
-How position, orientation, rotation, coordinate systems, and directional vectors are represented and calculated.
+### Module 10 — Transform & 3D Spatial Vector Architecture
+How position, orientation, rotation, coordinate systems, and directional vectors are represented, constrained, and calculated across different family creation and hosting paradigms.
 
 | Transform Feature | System Families | Loadable Families |
 |---|---|---|
-| **Location Property** | Typically `LocationCurve` (Walls, Beams) or boundary sketch (`Floor`). | Typically `LocationPoint` (Punctual) or `LocationCurve` (Line-based). |
-| **3D Transform Matrix** | Does not expose a direct instance transform (always in project world space). | Exposes `instance.GetTransform()` and `instance.GetTotalTransform()`. |
-| **Flipping & Mirroring** | Wall flip: `wall.Flip()` (flips exterior/interior orientation). | Multi-axis flipping: `instance.CanFlipFacing`, `instance.flipFacing()`, `instance.CanFlipHand`, `instance.flipHand()`. |
+| **Location Property** | Typically `LocationCurve` (Walls, Pipes, Ducts) or boundary sketch (`Floor`, `Roof`). | `LocationPoint` (Punctual/Hosted), `LocationCurve` (Line-Based), or `null`/degenerate (`Adaptive`). |
+| **3D Transform Matrix** | Does not expose an instance transform (geometry lives directly in project world space). | Exposes `instance.GetTransform()` and `instance.GetTotalTransform()`. |
+| **Flipping & Mirroring** | Wall flip: `wall.Flip()` (flips exterior/interior normal orientation). | Multi-axis flipping: `instance.CanFlipFacing`, `instance.flipFacing()`, `instance.CanFlipHand`, `instance.flipHand()`. |
 | **Mirrored State Check** | `wall.Flipped` (boolean). | `instance.Mirrored` and `instance.FacingFlipped` / `instance.HandFlipped`. |
 | **Local Orientation Vectors** | Derived from curve tangent: `(line.GetEndPoint(1) - line.GetEndPoint(0)).Normalize()`. | Dedicated properties: `instance.HandOrientation` (local X) and `instance.FacingOrientation` (local Y). |
 
 ---
 
-#### 🧭 Deep Dive: `HandOrientation` vs. Normal Direction Calculation Methods
+#### 🧭 Deep Dive: Family Creation & Placement Architecture Governs 3D Vector Calculations
 
-A frequent point of confusion for Revit API developers is: **What is `HandOrientation`, how does it differ from "normal" direction calculations, and can it be used on ANY family?**
+> [!IMPORTANT]
+> **Core Architectural Principle:**
+> **We must calculate 3D direction vectors according to the way Revit creates, hosts, and constrains the family, rather than forcing every element into a single universal calculation.**
+>
+> In CAD/OpenGL/Unity, 3D orientation is purely mathematical (translation vector + quaternion/Euler rotation applied to raw vertices). In Autodesk Revit, element geometry is strictly governed by **BIM Hosting Paradigms** and internal family definition constraints (`.rfa`). 
+
+```mermaid
+flowchart LR
+    A["1. Family Authoring<br/>(.rfa Template & Settings)"] --> B["2. Placement & Hosting<br/>(Level, Face, Curve, Multi-Point)"]
+    B --> C["3. Available Geometric Info<br/>(LocationPoint, LocationCurve, Transform)"]
+    C --> D["4. Revit Native Representation<br/>(Direct Basis vs. Parameter Slope)"]
+    D --> E["5. Correct 3D Vector Method<br/>(Extract, Transform, or Reconstruct)"]
+```
+
+---
+
+##### 1. Master 3D Vector & Family Placement Classification Matrix
+
+| Case # | Family & Placement Case | How It Is Created / Hosted | Available Geometric Information | How to Determine 3D Vector | Additional Data / Parameters Required | Limitations & Failure Modes |
+| :---: | :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | **Level-Hosted Point Family**<br>(Conveyors, Box Families, Free-Standing Equipment) | `NewFamilyInstance(XYZ, symbol, Level, NonStructural)`<br>`OneLevelBased` | • `LocationPoint.Point`<br>• `LocationPoint.Rotation` ($\theta_{\text{plan}}$)<br>• `HandOrientation` / `FacingOrientation` ($Z=0$) | **Reconstruct via Parameterized Math:**<br>$\vec{u}_{\text{3D}} = (u_x \cos\alpha, u_y \cos\alpha, \sin\alpha)$<br>where $\sin\alpha = \frac{Z_{\text{out}} - Z_{\text{in}}}{L}$ | `Infeed_Elevation`, `Outfeed_Elevation`, `Length` (instance parameters) | `LocationPoint.Rotation` is 1D scalar about global Z; slope is **not** stored in Revit's transform matrix. Translating origin in Z + writing parameters causes **double-elevation**. |
+| **2** | **Face-Hosted / Work-Plane Family**<br>(Guard Rails, Brackets, Face Fixtures) | `NewFamilyInstance(Face, XYZ, XYZ, symbol)`<br>`WorkPlaneBased` | • Host `Face`<br>• `Face.ComputeNormal(uv)`<br>• In-plane reference direction $\vec{d}_{\text{ref}}$<br>• `GetTransform().BasisZ` | **Direct Extraction from Transform / Face:**<br>$\hat{Z}_{\text{local}} = \vec{N}_{\text{face}}$<br>$\hat{X}_{\text{local}} = \text{proj}_{\text{face}}(\vec{d}_{\text{ref}})$<br>$\hat{Y}_{\text{local}} = \hat{Z} \times \hat{X}$ | Valid host `Face` and in-plane reference vector | Requires `Always Vertical = False` in `.rfa`. If `Always Vertical = True`, Revit forces $\text{BasisZ} = (0,0,1)$ even on a sloped face. |
+| **3** | **Curve-Based Family (Linear)**<br>(Walls, Beams, Ducts, Pipes, Line-Based Loadable) | `NewFamilyInstance(Curve, symbol, Level, ...)`<br>`Wall.Create(doc, Curve, ...)`<br>`CurveBased` | • `LocationCurve.Curve`<br>• Start Point $P_1 = \text{Curve.GetEndPoint}(0)$<br>• End Point $P_2 = \text{Curve.GetEndPoint}(1)$ | **Direct Native Vector Subtraction:**<br>$\vec{u}_{\text{3D}} = \frac{P_2 - P_1}{\|P_2 - P_1\|}$<br>Or `Line.Direction` / `ComputeDerivatives` | None (native curve geometry) | Casting `Location` to `LocationPoint` throws `InvalidCastException`. True 3D slope is encoded directly in curve coordinates. |
+| **4** | **Free 3D Spatial Component**<br>(Unhosted 3D equipment, tilted structural braces) | `NewFamilyInstance(XYZ, symbol, StructuralType)` + 3D Axis Rotation<br>`Always Vertical = False` | • `GetTransform().BasisX`<br>• `GetTransform().BasisY`<br>• `GetTransform().BasisZ`<br>• `GetTransform().Origin` | **Direct 3D Matrix Basis Read:**<br>$\vec{u}_{\text{longitudinal}} = \text{Transform.BasisX}$<br>$\vec{u}_{\text{transverse}} = \text{Transform.BasisY}$<br>$\vec{u}_{\text{normal}} = \text{Transform.BasisZ}$ | Requires 3D rotation via `ElementTransformUtils.RotateElement` | Family Editor setting `FAMILY_ALWAYS_VERTICAL` must be explicitly set to `0` (False). |
+| **5** | **MEP Connected Family**<br>(Pumps, Air Handlers, Valves, Connected Machinery) | Point-based or Hosted, but equipped with `MEPModel` connectors | • `MEPModel.ConnectorManager`<br>• `Connector.Origin`<br>• `Connector.CoordinateSystem.BasisZ` | **Direct Connector Port Orientation:**<br>$\vec{u}_{\text{flow}} = \text{Connector.CoordinateSystem.BasisZ}$<br>$P_{\text{port}} = \text{Connector.Origin}$ | `MEPModel` must not be null | Connector directions represent fluid/electrical flow vectors, independent of the family insertion origin. |
+| **6** | **Adaptive Multi-Point Family**<br>(Complex trusses, curved conveyors, panels) | `AdaptiveComponentInstanceUtils.CreateAdaptiveComponentInstance`<br>`Adaptive` | • `AdaptiveComponentInstanceUtils`<br>• Ordered `ReferencePoint` element IDs<br>• `ReferencePoint.Position` (XYZ) | **Point-to-Point Vector Reconstruction:**<br>$\vec{u}_{\text{segment}} = \frac{P_{i+1} - P_i}{\|P_{i+1} - P_i\|}$ | None (read from placement point elements) | `Location` is `null` or degenerate; cannot use `LocationPoint` or `LocationCurve`. Position is defined solely by placement points. |
+| **7** | **Two-Level Structural Member**<br>(Vertical vs. Slanted Structural Columns) | `NewFamilyInstance(XYZ, symbol, baseLvl, topLvl, Column)`<br>`TwoLevelsBased` | • `SLANTED_COLUMN_TYPE_PARAM`<br>• Vertical: `LocationPoint`<br>• Slanted: `LocationCurve` | **Dynamic Type Check:**<br>• If Vertical: $\vec{u} = (0, 0, 1)$<br>• If Slanted: $\vec{u} = \text{LocationCurve.Curve.Direction}$ | Built-in parameter `SLANTED_COLUMN_TYPE_PARAM` | When slanted, Revit converts `Location` from `LocationPoint` to `LocationCurve` on the fly. Blind casting throws `InvalidCastException`. |
+
+---
+
+##### 2. What is `HandOrientation` vs. 3D Orientation?
 
 ```mermaid
 flowchart TD
@@ -320,91 +350,85 @@ flowchart TD
     end
 ```
 
----
-
-##### 1. What is `HandOrientation`?
 * `FamilyInstance.HandOrientation` is an **`XYZ` unit vector** that represents the **local X-axis** of a component family definition expressed in project world coordinates.
 * **Architectural Origin**: In architectural terminology for doors and windows:
   * **`FacingOrientation`** (Local Y-axis): Points outward through the host wall (from interior to exterior, or facing direction).
   * **`HandOrientation`** (Local X-axis): Points along the wall face in the direction of the **door swing / hinge-to-latch ("Hand")** or component width.
 * **Flipping Awareness**: If the user clicks the horizontal flip control arrow in the Revit UI (or code calls `instance.flipHand()`), Revit inverts the `HandOrientation` vector by $180^\circ$ (multiplies by $-1$), while keeping `FacingOrientation` unchanged.
+* **Is `HandOrientation` Open to Use in ANY Type of Family?**
+  * **System Families** (`Wall`, `Floor`, `Pipe`, `Duct`): ❌ **NO (Compile Error)** — System families do not inherit from `FamilyInstance`.
+  * **Loadable Families**: ✔ **YES** — Exists on all `FamilyInstance` objects (returns local X basis vector `transform.BasisX`).
 
 ---
 
-##### 2. Is `HandOrientation` Open to Use in ANY Type of Family?
+##### 3. Why a Single "Generic `Get3DDirection`" Method is Flawed
 
-| Family Category / Type | Can You Use `HandOrientation`? | Why / Behavior |
-| :--- | :--- | :--- |
-| **System Families** (`Wall`, `Floor`, `Roof`, `Duct`, `Pipe`, `Ceiling`) | ❌ **NO (Compile Error)** | System families do **NOT** inherit from `FamilyInstance`. Calling `wall.HandOrientation` causes C# compiler error `CS1061: 'Wall' does not contain a definition for 'HandOrientation'`. |
-| **Loadable Families with Flip Controls** (`Doors`, `Windows`, `Air Terminals`, `Casework`) | ✔ **YES (Fully Functional)** | Actively reflects component rotation, placement angle, host alignment, and manual `HandFlipped` state. |
-| **Symmetrical / General Loadable Families** (`Columns`, `Furniture`, `Equipment`, `Generic Models`) | ✔ **YES (Returns Local X)** | The property exists on all `FamilyInstance` objects. For non-flippable families, it simply returns the instance's local X basis vector (`transform.BasisX`). |
-| **In-Place Families** (`FamilyInstance` created in-place in project) | ⚠️ **Limited / Default** | Returns default `(1,0,0)` unless explicitly rotated; flipping controls are typically not defined. |
+Attempting to write a single generic `Get3DDirection(planDirection, zIn, zOut, length)` method and applying it universally across all Revit families introduces serious architectural errors:
 
----
-
-##### 3. The 4 Ways to Calculate Element Direction in the Revit API
-
-Depending on whether an element is a **Linear System Family**, a **Punctual Loadable Family**, or a **Surface Host**, Revit API provides 4 different ways to compute direction:
-
-```mermaid
-flowchart TD
-    Elem["Target Element"] --> CheckType{"What kind of element is it?"}
-    
-    CheckType -->|"Linear Element (Wall, Beam, Pipe, Duct)"| M1["Method A: LocationCurve Direction<br/>Curve.ComputeDerivatives() / Line.Direction"]
-    CheckType -->|"Loadable Family (Door, Window, Equipment)"| M2["Method B: FamilyInstance.HandOrientation / FacingOrientation<br/>(Tracks flipHand / flipFacing state)"]
-    CheckType -->|"General 3D Loadable Component"| M3["Method C: instance.GetTransform().BasisX / BasisY / BasisZ<br/>(Universal 3D coordinate frame)"]
-    CheckType -->|"Point-Based Element with Planar Rotation"| M4["Method D: LocationPoint.Rotation<br/>Vector = (cos θ, sin θ, 0)"]
-```
+| # | Flaw / Invalid Assumption | Why It Breaks in Revit | Consequence / Failure Mode |
+| :-: | :--- | :--- | :--- |
+| **1** | **Assumes Infeed / Outfeed Parameters Always Exist** | Elevation parameters are custom application conventions (e.g. `ILUS_Infeed_Elevation`). Standard Revit families (doors, beams, ducts, equipment) do not have these parameters. | `NullReferenceException` or missing data. |
+| **2** | **Assumes Level-Based Placement Model** | If applied to a Face-Hosted family (e.g. Guard Rail on an inclined face), it ignores the host face surface normal and tries to reconstruct direction from horizontal plan angles. | Guard rails fail to align with the sloped host surface. |
+| **3** | **The Double-Elevation Defect** | Level-hosted families use internal parametric elevation. If code translates the insertion point by $\vec{u}_{\text{3D}} \cdot L$ (raising origin $Z$ by $\Delta Z$) AND writes `Infeed_Elevation = Z`, the family raises itself relative to an already elevated origin. | Geometry is elevated **twice** ($2 \times \Delta Z$). |
+| **4** | **Destroys Native Revit Geometric References** | Curve-based elements (`LocationCurve`) and MEP elements (`MEPModel`) already store true 3D vectors natively. Reconstructing them via plan trigonometry discards Revit's authoritative geometric data. | Loss of curve curvature, tangents, and port flow directions. |
+| **5** | **Fails on Non-Planar / Rotated Work Planes** | `LocationPoint.Rotation` is a 1D scalar. For face-hosted families on tilted surfaces with `Always Vertical = False`, `Rotation` is relative to the **tilted local Z-axis**, not global Z. | Trigonometric formulas produce incorrect world coordinates. |
+| **6** | **Produces a Vector Revit Does Not Use** | The computed 3D vector may be mathematically sound, but Revit's constraint engine does not store or use that vector for the element's position. | False sense of correctness; code operates on hypothetical coordinates rather than Revit's actual instance transform. |
 
 ---
 
 ##### 4. Master Comparison Matrix: Direction Calculation Methods
 
-| Aspect | Method A: `HandOrientation` / `FacingOrientation` | Method B: 3D Matrix `Transform.BasisX` | Method C: `LocationCurve.Curve.Direction` | Method D: `LocationPoint.Rotation` ($\theta$) |
+| Aspect | Method A: `HandOrientation` / `FacingOrientation` | Method B: 3D Matrix `Transform.BasisX` | Method C: `LocationCurve.Curve.Direction` | Method D: Parameterized Reconstruction ($\vec{u}_{\text{3D}}$) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Primary Target** | `FamilyInstance` (Loadable Families) | `FamilyInstance`, `RevitLinkInstance`, `GeometryInstance` | Linear elements (`Wall`, `Beam`, `Pipe`, `Duct`, `Line`) | Point-based elements with scalar rotation |
-| **System Families Supported?** | ❌ **NO** | ❌ **NO** | ✔ **YES** (Standard method for linear system families) | ❌ (Only if punctual system element) |
-| **Loadable Families Supported?** | ✔ **YES** | ✔ **YES** | ✔ Only if line-based loadable family (e.g. adaptive curve) | ✔ **YES** |
-| **Tracks UI Hand/Facing Flip?** | ✔ **YES** (Inverts when `HandFlipped == true`) | ⚠️ Only if using `GetTotalTransform()` | ❌ **NO** (`wall.Flip()` flips wall normal, not curve endpoints) | ❌ **NO** (Scalar angle does not encode mirror states) |
-| **Return Value** | 3D Unit Vector (`XYZ`) | 3D Basis Vector (`XYZ`) | 3D Normalized Vector (`XYZ`) | Scalar angle ($\theta$ in radians) |
-| **Calculation Overhead** | ⚡ Instant property read | ⚡ Instant matrix read | ⚡ Instant vector subtraction | ⚡ Instant trigonometric evaluation |
-| **Best Used For** | Doors, windows, MEP terminals where hinge/swing/facing matters. | General 3D coordinate system transforms, nested matrix math, CAD exports. | Tracing wall centerlines, pipe/duct flow routing, structural framing spans. | 2D plan rotation angle inspection around vertical Z-axis. |
+| **Primary Target** | `FamilyInstance` (Loadable Families) | `FamilyInstance`, `RevitLinkInstance`, `GeometryInstance` | Linear elements (`Wall`, `Beam`, `Pipe`, `Duct`, `Line`) | Level-hosted families with elevation parameters |
+| **System Families Supported?** | ❌ **NO** | ❌ **NO** | ✔ **YES** (Standard for linear system families) | ❌ **NO** |
+| **Loadable Families Supported?** | ✔ **YES** | ✔ **YES** | ✔ Only if line-based loadable family | ✔ **YES** (Point families with elevation params) |
+| **Tracks UI Hand/Facing Flip?** | ✔ **YES** (Inverts when `HandFlipped == true`) | ⚠️ Only if using `GetTotalTransform()` | ❌ **NO** (`wall.Flip()` flips wall normal, not endpoints) | ❌ **NO** (Must explicitly pass flipped facing) |
+| **Return Value** | 3D Unit Vector (`XYZ`) | 3D Basis Vector (`XYZ`) | 3D Normalized Vector (`XYZ`) | 3D Unit Vector ($\vec{u}_{\text{3D}}$) |
+| **Calculation Overhead** | ⚡ Instant property read | ⚡ Instant matrix read | ⚡ Instant vector subtraction | ⚡ Instant trigonometric calculation |
+| **Best Used For** | Doors, windows, equipment where swing/facing matters. | General 3D coordinate system transforms, face-hosted instances. | Tracing wall centerlines, pipe/duct flow routing, structural spans. | Level-hosted conveyors, chutes, and inclined equipment. |
 
 ---
 
-##### 5. Code Recipes: How to Calculate Direction for Any Family
+##### 5. Code Recipes: Calculating Direction According to Placement Architecture
 
 ```csharp
 // ============================================================================
-// METHOD A: Loadable Families (HandOrientation & FacingOrientation)
+// METHOD 1: Level-Hosted Parameterized Reconstruction (Conveyors / Box Families)
 // ============================================================================
-public static void AnalyzeLoadableDirection(FamilyInstance instance)
+public static XYZ GetLevelHosted3DDirection(FamilyInstance instance)
 {
-    // Local X-axis (Width / Swing / Hand direction along wall face):
-    XYZ handDir = instance.HandOrientation; // e.g. (1, 0, 0) or (-1, 0, 0) if flipped
+    if (instance.Location is LocationPoint locPoint)
+    {
+        double length = instance.LookupParameter("Length")?.AsDouble() ?? 10.0;
+        double zIn = instance.LookupParameter("ILUS_Infeed_Elevation")?.AsDouble() ?? locPoint.Point.Z;
+        double zOut = instance.LookupParameter("ILUS_Outfeed_Elevation")?.AsDouble() ?? locPoint.Point.Z;
 
-    // Local Y-axis (Facing / Depth direction through wall):
-    XYZ facingDir = instance.FacingOrientation; // e.g. (0, 1, 0)
+        XYZ planFacing = instance.FacingOrientation; // Or instance.HandOrientation
+        double horizontalLength = Math.Sqrt(planFacing.X * planFacing.X + planFacing.Y * planFacing.Y);
+        double ux = planFacing.X / horizontalLength;
+        double uy = planFacing.Y / horizontalLength;
 
-    // Check if user has flipped the instance in the UI:
-    bool isHandFlipped = instance.HandFlipped;
-    bool isFacingFlipped = instance.FacingFlipped;
+        double deltaZ = zOut - zIn;
+        double sinAlpha = deltaZ / length;
+        double cosAlpha = Math.Sqrt(1.0 - sinAlpha * sinAlpha);
+
+        return new XYZ(ux * cosAlpha, uy * cosAlpha, sinAlpha);
+    }
+    return XYZ.Zero;
 }
 
 // ============================================================================
-// METHOD B: General 3D Transform Matrix (Universal for Loadable Families)
+// METHOD 2: Face-Hosted / 3D Work-Plane Families (Guard Rails / Brackets)
 // ============================================================================
-public static void AnalyzeTransformBasis(FamilyInstance instance)
+public static (XYZ BasisX, XYZ BasisY, XYZ BasisZ) GetFaceHosted3DBasis(FamilyInstance instance)
 {
     Transform transform = instance.GetTotalTransform();
-    XYZ localX = transform.BasisX; // Equivalent to HandOrientation (unflipped)
-    XYZ localY = transform.BasisY; // Equivalent to FacingOrientation (unflipped)
-    XYZ localZ = transform.BasisZ; // Up Vector / Normal to placement plane
-    XYZ origin = transform.Origin; // Insertion Point in World Coordinates
+    return (transform.BasisX, transform.BasisY, transform.BasisZ);
 }
 
 // ============================================================================
-// METHOD C: Linear System Families (Walls, Ducts, Pipes, Beams)
+// METHOD 3: Linear System Families & Line-Based Families (Walls, Ducts, Pipes)
 // ============================================================================
 public static XYZ GetLinearElementDirection(Element element)
 {
@@ -412,27 +436,26 @@ public static XYZ GetLinearElementDirection(Element element)
     {
         Curve curve = locCurve.Curve;
         if (curve is Line line)
-        {
             return line.Direction; // Normalized (End - Start)
-        }
         else
-        {
-            // For curved elements (Arc, Spline), get tangent at start (parameter = 0):
             return curve.ComputeDerivatives(0.0, normalized: true).BasisX.Normalize();
-        }
     }
     return XYZ.Zero;
 }
 
 // ============================================================================
-// METHOD D: Point-Based Elements using LocationPoint.Rotation
+// METHOD 4: MEP Connected Equipment (Pumps, Valves, Terminals)
 // ============================================================================
-public static XYZ GetPointElementDirection(Element element)
+public static XYZ GetMEPFlowDirection(FamilyInstance instance)
 {
-    if (element.Location is LocationPoint locPoint)
+    ConnectorSet? connectors = instance.MEPModel?.ConnectorManager?.Connectors;
+    if (connectors != null)
     {
-        double rotationAngle = locPoint.Rotation; // Radians around Z-axis
-        return new XYZ(Math.Cos(rotationAngle), Math.Sin(rotationAngle), 0.0);
+        foreach (Connector c in connectors)
+        {
+            if (c.Domain == Domain.DomainHvac || c.Domain == Domain.DomainPiping)
+                return c.CoordinateSystem.BasisZ; // Flow direction vector
+        }
     }
     return XYZ.Zero;
 }
@@ -440,26 +463,23 @@ public static XYZ GetPointElementDirection(Element element)
 
 ---
 
-##### 6. Calculating End Point (Outfeed) & Z-Elevation Slope from LocationPoint Elements
+##### 6. Infeed vs. Outfeed Elevation Analysis Relative to $(0,0,0)$
 
-```mermaid
-flowchart TD
-    Target["Target LocationPoint Element"] --> M1["1. Generic Vector Ray: Start + (HandOrientation * L)"]
-    Target --> M2["2. Transform Matrix: Transform.OfPoint(localEndPoint)"]
-    Target --> M3["3. 3D Solid Geometry: Max Dot Product (V · Dir)"]
-    Target --> M4["4. MEP Connectors: Connector.Origin (Inflow/Outflow)"]
-    Target --> M5["5. 2D Polar Fallback: (cos θ, sin θ, 0) — Flat Planar Only"]
+Every point in Revit has an absolute elevation $Z$ measured in internal feet relative to the **Revit Internal Origin $(0,0,0)$**:
+
+```
+                     Outfeed P2 (X2, Y2, Z2)
+                             ▲
+                            /|
+                           / |
+              3D Vector   /  |  ΔZ (Height Difference) = Z2 - Z1
+                         /   |
+                        /    |
+                       /     ▼
+ Infeed P1 (X1, Y1, Z1) ───────
+                       Horizontal Run
 ```
 
-| Method | Applicable Scope | 3D Slope / Incline Support | Best Use Case |
-| :--- | :--- | :---: | :--- |
-| **1. Generic Vector Ray (`Point + HandOrientation * L`)** | **All Loadable Families** | ✔ **100% Yes** | Most universal method for parametric components with length. |
-| **2. 3D Transform (`Transform.OfPoint`)** | **All Loadable Families** | ✔ **100% Yes** | Components with defined local dimensions in family space. |
-| **3. Solid Vertex Projection** | **All 3D Solids** | ✔ **100% Yes** | Black-box geometry inspection without known parameters. |
-| **4. MEP Connectors (`ConnectorManager`)** | **MEP Families Only** | ✔ **100% Yes** | Equipment, pumps, valves, and connected machinery with ports. |
-| **5. 2D Polar Trigonometry (`cos θ, sin θ`)** | **2D Flat Planar Only** | ❌ **No (Forces Z=0)** | Basic 2D horizontal plan rotation checks. |
-
-###### Infeed vs. Outfeed Elevation Analysis Relative to $(0,0,0)$:
 1. $\text{Elevation}_{\text{infeed}} = P_1.Z$
 2. $\text{Elevation}_{\text{outfeed}} = P_2.Z$
 3. $\text{Height Delta } \Delta Z = P_2.Z - P_1.Z$
