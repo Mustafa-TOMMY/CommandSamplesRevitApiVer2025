@@ -440,6 +440,34 @@ public static XYZ GetPointElementDirection(Element element)
 
 ---
 
+##### 6. Calculating End Point (Outfeed) & Z-Elevation Slope from LocationPoint Elements
+
+```mermaid
+flowchart TD
+    Target["Target LocationPoint Element"] --> M1["1. Generic Vector Ray: Start + (HandOrientation * L)"]
+    Target --> M2["2. Transform Matrix: Transform.OfPoint(localEndPoint)"]
+    Target --> M3["3. 3D Solid Geometry: Max Dot Product (V · Dir)"]
+    Target --> M4["4. MEP Connectors: Connector.Origin (Inflow/Outflow)"]
+    Target --> M5["5. 2D Polar Fallback: (cos θ, sin θ, 0) — Flat Planar Only"]
+```
+
+| Method | Applicable Scope | 3D Slope / Incline Support | Best Use Case |
+| :--- | :--- | :---: | :--- |
+| **1. Generic Vector Ray (`Point + HandOrientation * L`)** | **All Loadable Families** | ✔ **100% Yes** | Most universal method for parametric components with length. |
+| **2. 3D Transform (`Transform.OfPoint`)** | **All Loadable Families** | ✔ **100% Yes** | Components with defined local dimensions in family space. |
+| **3. Solid Vertex Projection** | **All 3D Solids** | ✔ **100% Yes** | Black-box geometry inspection without known parameters. |
+| **4. MEP Connectors (`ConnectorManager`)** | **MEP Families Only** | ✔ **100% Yes** | Equipment, pumps, valves, and connected machinery with ports. |
+| **5. 2D Polar Trigonometry (`cos θ, sin θ`)** | **2D Flat Planar Only** | ❌ **No (Forces Z=0)** | Basic 2D horizontal plan rotation checks. |
+
+###### Infeed vs. Outfeed Elevation Analysis Relative to $(0,0,0)$:
+1. $\text{Elevation}_{\text{infeed}} = P_1.Z$
+2. $\text{Elevation}_{\text{outfeed}} = P_2.Z$
+3. $\text{Height Delta } \Delta Z = P_2.Z - P_1.Z$
+4. $\text{Horizontal Planar Run} = \sqrt{(X_2 - X_1)^2 + (Y_2 - Y_1)^2}$
+5. $\text{Slope Percentage} = \left(\frac{\Delta Z}{\text{Run}}\right) \times 100\%$
+
+---
+
 ### Module 11 — Levels & Vertical Constraints
 Vertical positioning and level association.
 
