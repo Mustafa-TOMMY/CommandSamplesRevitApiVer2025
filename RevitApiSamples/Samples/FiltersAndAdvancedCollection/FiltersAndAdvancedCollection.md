@@ -2,7 +2,7 @@
 
 ## 1. Mental Model & Architecture
 
-While **Module 02 (ElementCollection)** introduces basic collection queries (`OfCategory`, `OfClass`, `WhereElementIsNotElementType`), **Module 15 (Filters & Advanced Collection)** focuses on high-performance database filtering, complex boolean composition, parameter rule factories, and **true 3D physical collision detection**.
+While **Module 02 (ElementCollection)** introduces basic collection queries (`OfCategory`, `OfClass`, `WhereElementIsNotElementType`), **Module 15 (Filters & Advanced Collection)** focuses on high-performance database filtering, complex boolean composition, parameter rule factories, **true 3D physical collision detection**, and **persistent View Filters (`ParameterFilterElement`)**.
 
 ```mermaid
 flowchart TD
@@ -358,7 +358,50 @@ flowchart TD
 
 ---
 
-## 10. Learning Progression (Commands 01–08)
+## 10. Deep Dive: Persistent View Filters (`ParameterFilterElement`) vs. In-Memory Query Filters (`ElementParameterFilter`)
+
+A fundamental distinction in the Revit API is between **Transient Query Filters** and **Persistent View Filters**:
+
+```mermaid
+flowchart TD
+    subgraph Step1 ["1. Define Filter Criteria (In-Memory)"]
+        Rule["FilterRule (ParameterFilterRuleFactory)"]
+        Filter["ElementParameterFilter(Rule)"]
+        Cats["Categories: List<ElementId> { OST_Walls }"]
+        Rule --> Filter
+    end
+
+    subgraph Step2 ["2. Create Database Element (Transaction Required)"]
+        PFE["ParameterFilterElement.Create(doc, 'Filter Name', Cats, Filter)"]
+        Filter --> PFE
+        Cats --> PFE
+    end
+
+    subgraph Step3 ["3. Apply to View (Visibility / Graphics VV / VG)"]
+        View["View (doc.ActiveView)"]
+        Add["view.AddFilter(filterElement.Id)"]
+        Vis["view.SetFilterVisibility(filterElement.Id, true/false)"]
+        OGS["view.SetFilterOverrides(filterElement.Id, overrideGraphicSettings)"]
+        
+        PFE --> Add --> View
+        PFE --> Vis --> View
+        PFE --> OGS --> View
+    end
+```
+
+### Direct Comparison: `ElementParameterFilter` vs. `ParameterFilterElement`
+
+| Aspect | `ElementParameterFilter` | `ParameterFilterElement` |
+| :--- | :--- | :--- |
+| **What It Is** | An in-memory query filter object (`ElementSlowFilter`). | A **Revit Database Element** (`Autodesk.Revit.DB.Element`). |
+| **Storage** | Lives only in RAM during command execution. | **Persisted permanently** in the `.rvt` file with an `ElementId`. |
+| **Transaction Required?** | ❌ No (Read-only query). | ✔ **Yes** (`TransactionMode.Manual` required to create/edit). |
+| **Where You See It** | Inside C# code with `FilteredElementCollector`. | Inside the Revit UI under **Visibility/Graphic Overrides (VV/VG) $\rightarrow$ Filters tab**. |
+| **Primary Capabilities** | Filtering collector elements. | Overriding colors, projection lines, cut patterns, transparency, and turning visibility on/off per view. |
+
+---
+
+## 11. Learning Progression (Commands 01–09)
 
 | # | Command File | Class Name | Main API | What It Teaches |
 | :--- | :--- | :--- | :--- | :--- |
@@ -370,10 +413,11 @@ flowchart TD
 | **06** | [ElementIntersectsElementCommand.cs](Commands/ElementIntersectsElementCommand.cs) | `ElementIntersectsElementCommand` | `ElementIntersectsElementFilter` | 3D solid collision detection against a selected host element. |
 | **07** | [ElementIntersectsSolidCommand.cs](Commands/ElementIntersectsSolidCommand.cs) | `ElementIntersectsSolidCommand` | `ElementIntersectsSolidFilter`, `GeometryCreationUtilities` | Clearance envelope creation and custom 3D solid interference testing. |
 | **08** | [LinkedModelIntersectionCommand.cs](Commands/LinkedModelIntersectionCommand.cs) | `LinkedModelIntersectionCommand` | `ElementIntersectsSolidFilter`, `RevitLinkInstance`, `SolidUtils` | Cross-model clash detection: Transforming linked element solids to host world space for collision querying. |
+| **09** | [CreateViewFilterCommand.cs](Commands/CreateViewFilterCommand.cs) | `CreateViewFilterCommand` | `ParameterFilterElement.Create`, `View.AddFilter`, `View.SetFilterOverrides` | Creating persistent View Filters in the Revit database and applying color overrides in Visibility/Graphics. |
 
 ---
 
-## 11. Command Deep Dives & Code Recipes
+## 12. Command Deep Dives & Code Recipes
 
 ### 🔹 Command 01: `LogicalFiltersCommand`
 Demonstrates composing boolean filter trees combining Category filters with an `ElementLevelFilter`.
@@ -574,10 +618,57 @@ IList<Element> hostClashes = new FilteredElementCollector(hostDoc)
 
 ---
 
-## 12. Summary of Best Practices & Common Pitfalls
+### 🔹 Command 09: `CreateViewFilterCommand`
+Creates a persistent `ParameterFilterElement` in the Revit database and applies it to the active view's Visibility/Graphic Overrides (VV/VG) with red color overrides.
+
+```csharp
+// 1. Define target categories
+ICollection<ElementId> targetCategories = new List<ElementId>
+{
+    new ElementId(BuiltInCategory.OST_Walls)
+};
+
+// 2. Build Rule Criteria: Walls where Comments contains 'Fire'
+ElementId commentsParamId = new ElementId(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+FilterRule rule = ParameterFilterRuleFactory.CreateContainsRule(commentsParamId, "Fire", false);
+ElementParameterFilter criteria = new ElementParameterFilter(rule);
+
+// 3. Create persistent ParameterFilterElement in database
+using (Transaction t = new Transaction(doc, "Create and Apply View Filter"))
+{
+    t.Start();
+
+    ParameterFilterElement filterElement = ParameterFilterElement.Create(
+        doc, 
+        "Walls - Fire Safety Check", 
+        targetCategories, 
+        criteria);
+
+    // 4. Add Filter to Active View
+    if (!activeView.IsFilterApplied(filterElement.Id))
+    {
+        activeView.AddFilter(filterElement.Id);
+    }
+
+    // 5. Apply Red Line Graphic Overrides
+    OverrideGraphicSettings overrideSettings = new OverrideGraphicSettings();
+    overrideSettings.SetProjectionLineColor(new Color(255, 0, 0));
+    overrideSettings.SetProjectionLineWeight(5);
+
+    activeView.SetFilterOverrides(filterElement.Id, overrideSettings);
+    activeView.SetFilterVisibility(filterElement.Id, true);
+
+    t.Commit();
+}
+```
+
+---
+
+## 13. Summary of Best Practices & Common Pitfalls
 
 1. **Avoid LINQ for Base Filtering:** Always prefer `ElementParameterFilter` or `ParameterFilterRuleFactory` over `.Where(x => x.LookupParameter(...))` whenever possible.
 2. **Exclude Self in Collision Checks:** When checking clashes against a target element, always pass an `ExclusionFilter([target.Id])` to prevent the element from reporting a collision with itself.
 3. **Bounding Box Pre-Pass:** Before applying `ElementIntersectsElementFilter` or `ElementIntersectsSolidFilter`, always apply a `BoundingBoxIntersectsFilter` with the target's bounding box `Outline` to discard non-proximate elements instantly.
 4. **Always Transform Linked Solids:** Never pass a raw solid extracted from a linked model directly to `ElementIntersectsSolidFilter` without transforming it with `linkInstance.GetTotalTransform()`.
 5. **Chain Quick Filters with `ElementLevelFilter`:** Because `ElementLevelFilter` is a slow filter (it reads element parameter maps), always chain it after `.OfCategory()` or `.OfClass()` to maintain maximum query performance.
+6. **Persistent vs Transient Filters:** Remember that `ElementParameterFilter` is for C# database querying, while `ParameterFilterElement` is a database element for View Visibility/Graphics overrides (`VV / VG`).
