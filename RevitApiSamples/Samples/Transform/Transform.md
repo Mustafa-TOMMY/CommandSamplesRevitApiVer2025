@@ -6,11 +6,16 @@ A Transform in Revit is a 4×4 affine matrix representing Translation (origin in
 
 ```mermaid
 graph TD
-    T["Transform (4x4 Affine Matrix)"]
+    T["Transform<br/>(4×4 Affine Matrix)"]
     T --> O["Origin (XYZ)<br/>Translation in World Coordinates"]
     T --> BX["BasisX (XYZ)<br/>Local X-Axis (Hand / Width / Tangent)"]
     T --> BY["BasisY (XYZ)<br/>Local Y-Axis (Facing / Depth / Normal)"]
     T --> BZ["BasisZ (XYZ)<br/>Local Z-Axis (Up Vector / Tilt / Normal)"]
+
+    classDef root fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2,font-weight:bold;
+    classDef axis fill:#44506b,stroke:#8fa3b8,color:#e8edf2;
+    class T root
+    class O,BX,BY,BZ axis
 ```
 
 ---
@@ -21,7 +26,7 @@ graph TD
 > **Fundamental Architectural Rule:**
 > **We must calculate 3D direction vectors according to the way Revit creates, hosts, and constrains the family, rather than forcing every element into a single universal calculation.**
 >
-> In CAD/OpenGL/Unity, 3D orientation is purely mathematical (translation vector + quaternion/Euler rotation applied to raw vertices). In Autodesk Revit, element geometry is strictly governed by **BIM Hosting Paradigms** and internal family definition constraints (`.rfa`). 
+> In CAD/OpenGL/Unity, 3D orientation is purely mathematical (translation vector + quaternion/Euler rotation applied to raw vertices). In Autodesk Revit, element geometry is strictly governed by **BIM Hosting Paradigms** and internal family definition constraints (`.rfa`).
 
 ### The 5-Stage Spatial Resolution Pipeline
 
@@ -31,6 +36,9 @@ flowchart LR
     B --> C["3. Available Geometric Info<br/>(LocationPoint, LocationCurve, Transform)"]
     C --> D["4. Revit Native Representation<br/>(Direct Basis vs. Parameter Slope)"]
     D --> E["5. Correct 3D Vector Method<br/>(Extract, Transform, or Reconstruct)"]
+
+    classDef stage fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    class A,B,C,D,E stage
 ```
 
 ---
@@ -53,12 +61,12 @@ The following matrix classifies all family and placement cases in Revit, definin
 
 | Case # | Family & Placement Architecture | Creation API / Hosting Type | Available Geometric Information | How to Determine 3D Direction Vector | Additional Parameters / Data Required | Limitations & Constraints |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Level-Hosted Point Family**<br>(Conveyors, Box Families, Free-Standing Equipment) | `NewFamilyInstance(XYZ, symbol, Level, NonStructural)`<br>`FamilyPlacementType.OneLevelBased` | • `LocationPoint.Point`<br>• `LocationPoint.Rotation` ($\theta_{\text{plan}}$)<br>• `HandOrientation` / `FacingOrientation` ($Z=0$) | **Reconstruct via Parameterized Math:**<br>$\vec{u}_{\text{3D}} = (u_x \cos\alpha, u_y \cos\alpha, \sin\alpha)$<br>where $\sin\alpha = \frac{Z_{\text{out}} - Z_{\text{in}}}{L}$ | `Infeed_Elevation`, `Outfeed_Elevation`, `Length` (instance parameters) | `LocationPoint.Rotation` is 1D scalar about global Z; slope is **not** stored in Revit's transform matrix. Translating origin in Z + writing parameters causes **double-elevation**. |
+| **1** | **Level-Hosted Point Family**<br>(Conveyors, Box Families, Free-Standing Equipment) | `NewFamilyInstance(XYZ, symbol, Level, NonStructural)`<br>`FamilyPlacementType.OneLevelBased` | • `LocationPoint.Point`<br>• `LocationPoint.Rotation` ($\theta_{\text{plan}}$)<br>• `HandOrientation` / `FacingOrientation` ($Z=0$) | **Reconstruct via Parameterized Math:**<br>$\vec{u}_{\text{3D}} = (u_x \cos\alpha,\ u_y \cos\alpha,\ \sin\alpha)$<br>where $\sin\alpha = \dfrac{Z_{\text{out}} - Z_{\text{in}}}{L}$ | `Infeed_Elevation`, `Outfeed_Elevation`, `Length` (instance parameters) | `LocationPoint.Rotation` is a 1D scalar about global Z; slope is **not** stored in Revit's transform matrix. Translating origin in Z + writing parameters causes **double-elevation**. |
 | **2** | **Face-Hosted / Work-Plane Family**<br>(Guard Rails, Brackets, Face Mounted Fixtures) | `NewFamilyInstance(Face, XYZ, XYZ, symbol)`<br>`FamilyPlacementType.WorkPlaneBased` | • Host `Face`<br>• `Face.ComputeNormal(uv)`<br>• In-plane reference direction $\vec{d}_{\text{ref}}$<br>• `GetTransform().BasisZ` | **Direct Extraction from Transform / Face:**<br>$\hat{Z}_{\text{local}} = \vec{N}_{\text{face}}$<br>$\hat{X}_{\text{local}} = \text{proj}_{\text{face}}(\vec{d}_{\text{ref}})$<br>$\hat{Y}_{\text{local}} = \hat{Z} \times \hat{X}$ | Valid host `Face` and in-plane reference vector | Requires `Always Vertical = False` in `.rfa`. If `Always Vertical = True`, Revit forces $\text{BasisZ} = (0,0,1)$ even on a sloped face. |
-| **3** | **Curve-Based Family (Linear)**<br>(Walls, Beams, Ducts, Pipes, Line-Based Loadable) | `NewFamilyInstance(Curve, symbol, Level, ...)`<br>`Wall.Create(doc, Curve, ...)`<br>`FamilyPlacementType.CurveBased` | • `LocationCurve.Curve`<br>• Start Point $P_1 = \text{Curve.GetEndPoint}(0)$<br>• End Point $P_2 = \text{Curve.GetEndPoint}(1)$ | **Direct Native Vector Subtraction:**<br>$\vec{u}_{\text{3D}} = \frac{P_2 - P_1}{\|P_2 - P_1\|}$<br>Or `Line.Direction` / `ComputeDerivatives` | None (native curve geometry) | Casting `Location` to `LocationPoint` throws `InvalidCastException`. True 3D slope is encoded directly in curve coordinates. |
+| **3** | **Curve-Based Family (Linear)**<br>(Walls, Beams, Ducts, Pipes, Line-Based Loadable) | `NewFamilyInstance(Curve, symbol, Level, ...)`<br>`Wall.Create(doc, Curve, ...)`<br>`FamilyPlacementType.CurveBased` | • `LocationCurve.Curve`<br>• Start Point $P_1 = \text{Curve.GetEndPoint}(0)$<br>• End Point $P_2 = \text{Curve.GetEndPoint}(1)$ | **Direct Native Vector Subtraction:**<br>$\vec{u}_{\text{3D}} = \dfrac{P_2 - P_1}{\lVert P_2 - P_1 \rVert}$<br>Or `Line.Direction` / `ComputeDerivatives` | None (native curve geometry) | Casting `Location` to `LocationPoint` throws `InvalidCastException`. True 3D slope is encoded directly in curve coordinates. |
 | **4** | **Free 3D Spatial Component**<br>(Unhosted 3D equipment, tilted structural braces) | `NewFamilyInstance(XYZ, symbol, StructuralType)` + 3D Axis Rotation<br>`Always Vertical = False` | • `GetTransform().BasisX`<br>• `GetTransform().BasisY`<br>• `GetTransform().BasisZ`<br>• `GetTransform().Origin` | **Direct 3D Matrix Basis Read:**<br>$\vec{u}_{\text{longitudinal}} = \text{Transform.BasisX}$<br>$\vec{u}_{\text{transverse}} = \text{Transform.BasisY}$<br>$\vec{u}_{\text{normal}} = \text{Transform.BasisZ}$ | Requires 3D rotation via `ElementTransformUtils.RotateElement` | Family Editor setting `FAMILY_ALWAYS_VERTICAL` must be explicitly set to `0` (False). |
 | **5** | **MEP Connected Family**<br>(Pumps, Air Handlers, Valves, Connected Machinery) | Point-based or Hosted, but equipped with `MEPModel` connectors | • `MEPModel.ConnectorManager`<br>• `Connector.Origin`<br>• `Connector.CoordinateSystem.BasisZ` | **Direct Connector Port Orientation:**<br>$\vec{u}_{\text{flow}} = \text{Connector.CoordinateSystem.BasisZ}$<br>$P_{\text{port}} = \text{Connector.Origin}$ | `MEPModel` must not be null | Connector directions represent fluid/electrical flow vectors, independent of the family insertion origin. |
-| **6** | **Adaptive Multi-Point Family**<br>(Complex trusses, curved conveyors, panels) | `AdaptiveComponentInstanceUtils.CreateAdaptiveComponentInstance`<br>`FamilyPlacementType.Adaptive` | • `AdaptiveComponentInstanceUtils`<br>• Ordered `ReferencePoint` element IDs<br>• `ReferencePoint.Position` (XYZ) | **Point-to-Point Vector Reconstruction:**<br>$\vec{u}_{\text{segment}} = \frac{P_{i+1} - P_i}{\|P_{i+1} - P_i\|}$ | None (read from placement point elements) | `Location` is `null` or degenerate; cannot use `LocationPoint` or `LocationCurve`. Position is defined solely by placement points. |
+| **6** | **Adaptive Multi-Point Family**<br>(Complex trusses, curved conveyors, panels) | `AdaptiveComponentInstanceUtils.CreateAdaptiveComponentInstance`<br>`FamilyPlacementType.Adaptive` | • `AdaptiveComponentInstanceUtils`<br>• Ordered `ReferencePoint` element IDs<br>• `ReferencePoint.Position` (XYZ) | **Point-to-Point Vector Reconstruction:**<br>$\vec{u}_{\text{segment}} = \dfrac{P_{i+1} - P_i}{\lVert P_{i+1} - P_i \rVert}$ | None (read from placement point elements) | `Location` is `null` or degenerate; cannot use `LocationPoint` or `LocationCurve`. Position is defined solely by placement points. |
 | **7** | **Two-Level Structural Member**<br>(Vertical vs. Slanted Structural Columns) | `NewFamilyInstance(XYZ, symbol, baseLvl, topLvl, Column)`<br>`FamilyPlacementType.TwoLevelsBased` | • `SLANTED_COLUMN_TYPE_PARAM`<br>• Vertical: `LocationPoint`<br>• Slanted: `LocationCurve` | **Dynamic Type Check:**<br>• If Vertical: $\vec{u} = (0, 0, 1)$<br>• If Slanted: $\vec{u} = \text{LocationCurve.Curve.Direction}$ | Built-in parameter `SLANTED_COLUMN_TYPE_PARAM` | When slanted, Revit converts `Location` from `LocationPoint` to `LocationCurve` on the fly. Blind casting throws `InvalidCastException`. |
 
 ---
@@ -69,22 +77,37 @@ The following matrix classifies all family and placement cases in Revit, definin
 
 ```mermaid
 flowchart TD
-    Origin["LocationPoint.Point (X, Y, Level Elevation)"]
-    Rot["LocationPoint.Rotation (1D Plan Angle θ)"]
+    Origin["LocationPoint.Point<br/>(X, Y, Level Elevation)"]
+    Rot["LocationPoint.Rotation<br/>(1D Plan Angle θ)"]
     Params["Instance Parameters:<br/>ILUS_Infeed_Elevation (Z1)<br/>ILUS_Outfeed_Elevation (Z2)<br/>Length (L)"]
-    
-    Origin --> Math["Application-Level Reconstruction:<br/>sin(α) = (Z2 - Z1) / L<br/>V_3D = (cos θ cos α, sin θ cos α, sin α)"]
-    Rot --> Math
-    Params --> Math
+
+    Origin --> Recon["Application-Level Reconstruction:<br/>sin(α) = (Z2 − Z1) / L<br/>V_3D = (cosθ·cosα, sinθ·cosα, sinα)"]
+    Rot --> Recon
+    Params --> Recon
+
+    classDef input fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    classDef derived fill:#4a3b3b,stroke:#b88f8f,color:#e8edf2;
+    class Origin,Rot,Params input
+    class Recon derived
 ```
 
 1. **How Created/Placed:** `doc.Create.NewFamilyInstance(XYZ, symbol, level, StructuralType.NonStructural)`.
 2. **Exposed Information:** `LocationPoint.Point` (X, Y on Level plane; Z is Level elevation) and `LocationPoint.Rotation` (1D scalar angle in radians about vertical Z).
 3. **Retrieval vs. Reconstruction:** **Reconstruction is mandatory.** Revit's internal object model has *no field* for 3D tilt on level-hosted instances.
 4. **Mathematical Formulation:**
-   $$\Delta Z = Z_{\text{outfeed}} - Z_{\text{infeed}}$$
-   $$\sin\alpha = \frac{\Delta Z}{L}, \quad \cos\alpha = \sqrt{1 - \sin^2\alpha}$$
-   $$\vec{u}_{\text{3D}} = \left( \cos\theta_{\text{plan}} \cdot \cos\alpha, \; \sin\theta_{\text{plan}} \cdot \cos\alpha, \; \sin\alpha \right)$$
+
+$$
+\Delta Z = Z_{\text{outfeed}} - Z_{\text{infeed}}
+$$
+
+$$
+\sin\alpha = \frac{\Delta Z}{L}, \qquad \cos\alpha = \sqrt{1 - \sin^2\alpha}
+$$
+
+$$
+\vec{u}_{\text{3D}} = \left( \cos\theta_{\text{plan}} \cdot \cos\alpha,\ \sin\theta_{\text{plan}} \cdot \cos\alpha,\ \sin\alpha \right)
+$$
+
 5. **Key Code Implementation:** Implemented in [`GeometryUtils.Get3DDirection`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Utilities/GeometryUtils.cs#L22-L72) and [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs).
 
 ---
@@ -93,21 +116,36 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Face["Host Top Face (PlanarFace)"] --> Norm["Face Normal Vector N = ComputeNormal(uv)"]
-    RefDir["Reference Direction d_ref (Along Conveyor Axis)"] --> Proj["In-Plane Reference Vector:<br/>X_local = d_ref - (d_ref · N) N"]
-    Norm --> BasisZ["Transform.BasisZ = N (Local Z-Axis)"]
+    Face["Host Top Face<br/>(PlanarFace)"] --> Norm["Face Normal Vector<br/>N = ComputeNormal(uv)"]
+    RefDir["Reference Direction d_ref<br/>(Along Conveyor Axis)"] --> Proj["In-Plane Reference Vector:<br/>X_local = d_ref − (d_ref · N)·N"]
+    Norm --> BasisZ["Transform.BasisZ = N<br/>(Local Z-Axis)"]
     Proj --> BasisX["Transform.BasisX = X_local / ‖X_local‖"]
     BasisZ --> BasisY["Transform.BasisY = BasisZ × BasisX"]
     BasisX --> BasisY
+
+    classDef source fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    classDef basis fill:#39494a,stroke:#7ea3a0,color:#e8edf2;
+    class Face,RefDir source
+    class Norm,Proj,BasisZ,BasisX,BasisY basis
 ```
 
 1. **How Created/Placed:** `doc.Create.NewFamilyInstance(face, referencePoint, referenceDirection, symbol)`.
 2. **Exposed Information:** The host `Face` geometry, surface normal $\vec{N}$, and `instance.GetTransform()`.
 3. **Retrieval vs. Reconstruction:** **Direct Retrieval from 3D Transform Matrix.** The instance's local Z-axis ($\text{BasisZ}$) snaps directly to the host face normal $\vec{N}_{\text{face}}$.
 4. **Mathematical Formulation:**
-   $$\hat{Z}_{\text{local}} = \vec{N}_{\text{face}}$$
-   $$\vec{X}_{\text{proj}} = \vec{d}_{\text{ref}} - (\vec{d}_{\text{ref}} \cdot \hat{Z}_{\text{local}})\hat{Z}_{\text{local}}, \quad \hat{X}_{\text{local}} = \frac{\vec{X}_{\text{proj}}}{\|\vec{X}_{\text{proj}}\|}$$
-   $$\hat{Y}_{\text{local}} = \hat{Z}_{\text{local}} \times \hat{X}_{\text{local}}$$
+
+$$
+\hat{Z}_{\text{local}} = \vec{N}_{\text{face}}
+$$
+
+$$
+\vec{X}_{\text{proj}} = \vec{d}_{\text{ref}} - (\vec{d}_{\text{ref}} \cdot \hat{Z}_{\text{local}})\,\hat{Z}_{\text{local}}, \qquad \hat{X}_{\text{local}} = \frac{\vec{X}_{\text{proj}}}{\lVert \vec{X}_{\text{proj}} \rVert}
+$$
+
+$$
+\hat{Y}_{\text{local}} = \hat{Z}_{\text{local}} \times \hat{X}_{\text{local}}
+$$
+
 5. **Key Code Implementation:** Implemented in [`GeometryUtils.GetGuardRailReferenceDirection`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Utilities/GeometryUtils.cs#L74-L101) and [`PlacementService.PlaceHostedInstance`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Services/PlacementService.cs#L39-L74).
 
 ---
@@ -116,20 +154,33 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    LC["LocationCurve"] --> C["Curve (Line, Arc, Spline)"]
-    C --> P0["Start Point P1 = Curve.GetEndPoint(0)"]
-    C --> P1["End Point P2 = Curve.GetEndPoint(1)"]
-    P0 --> Dir["3D Direction Vector = (P2 - P1).Normalize()"]
-    P1 --> Dir
+    LC["LocationCurve"] --> Crv["Curve (Line, Arc, Spline)"]
+    Crv --> Start["Start Point<br/>P1 = Curve.GetEndPoint(0)"]
+    Crv --> End["End Point<br/>P2 = Curve.GetEndPoint(1)"]
+    Start --> Dir["3D Direction Vector<br/>= (P2 − P1).Normalize()"]
+    End --> Dir
+
+    classDef native fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    classDef result fill:#39494a,stroke:#7ea3a0,color:#e8edf2;
+    class LC,Crv,Start,End native
+    class Dir result
 ```
 
 1. **How Created/Placed:** `doc.Create.NewFamilyInstance(curve, symbol, level, StructuralType)` or `Wall.Create(doc, curve, levelId, false)`.
 2. **Exposed Information:** `LocationCurve.Curve`, start coordinate $P_1$, end coordinate $P_2$, `Line.Direction`.
 3. **Retrieval vs. Reconstruction:** **Direct Native Vector Subtraction.** Both $P_1$ and $P_2$ already exist as true 3D spatial coordinates in world space.
 4. **Mathematical Formulation:**
-   $$\vec{u}_{\text{3D}} = \frac{P_2 - P_1}{\|P_2 - P_1\|}$$
-   For curved paths (Arcs/Splines), tangent at parameter $t$:
-   $$\vec{T}(t) = \text{Curve.ComputeDerivatives}(t, \text{normalized: true}).\text{BasisX}.\text{Normalize}()$$
+
+$$
+\vec{u}_{\text{3D}} = \frac{P_2 - P_1}{\lVert P_2 - P_1 \rVert}
+$$
+
+For curved paths (Arcs/Splines), tangent at parameter $t$:
+
+$$
+\vec{T}(t) = \text{Curve.ComputeDerivatives}(t,\ \text{normalized: true}).\text{BasisX}.\text{Normalize}()
+$$
+
 5. **Key Code Implementation:** Implemented in [`DivideCurveByDistanceCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/DivideCurveByDistanceCommand.cs) and [`GetPointOnCurveCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetPointOnCurveCommand.cs).
 
 ---
@@ -140,9 +191,19 @@ flowchart LR
 2. **Exposed Information:** `instance.GetTransform()` and `instance.GetTotalTransform()`.
 3. **Retrieval vs. Reconstruction:** **Direct 3D Matrix Basis Read.** The 3D orientation is explicitly represented in the 4×4 affine transform.
 4. **Mathematical Formulation:**
-   $$\vec{u}_{\text{longitudinal}} = \text{Transform.BasisX}$$
-   $$\vec{u}_{\text{transverse}} = \text{Transform.BasisY}$$
-   $$\vec{u}_{\text{up}} = \text{Transform.BasisZ}$$
+
+$$
+\vec{u}_{\text{longitudinal}} = \text{Transform.BasisX}
+$$
+
+$$
+\vec{u}_{\text{transverse}} = \text{Transform.BasisY}
+$$
+
+$$
+\vec{u}_{\text{up}} = \text{Transform.BasisZ}
+$$
+
 5. **Key Code Implementation:** Implemented in [`TransformGeometryCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/TransformGeometryCommand.cs).
 
 ---
@@ -153,8 +214,15 @@ flowchart LR
 2. **Exposed Information:** `familyInstance.MEPModel.ConnectorManager.Connectors`.
 3. **Retrieval vs. Reconstruction:** **Direct Connector Port Coordinate Frame.**
 4. **Mathematical Formulation:**
-   $$P_{\text{port}} = \text{Connector.Origin}$$
-   $$\vec{u}_{\text{flow}} = \text{Connector.CoordinateSystem.BasisZ}$$
+
+$$
+P_{\text{port}} = \text{Connector.Origin}
+$$
+
+$$
+\vec{u}_{\text{flow}} = \text{Connector.CoordinateSystem.BasisZ}
+$$
+
 5. **Key Code Implementation:** Implemented in [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs#L50-L70).
 
 ---
@@ -165,7 +233,10 @@ flowchart LR
 2. **Exposed Information:** Ordered array of `ReferencePoint` element IDs.
 3. **Retrieval vs. Reconstruction:** **Point-to-Point Explicit 3D Vector.** `Location` is degenerate; coordinates are read from `ReferencePoint.Position`.
 4. **Mathematical Formulation:**
-   $$\vec{u}_{i \to i+1} = \frac{P_{i+1} - P_i}{\|P_{i+1} - P_i\|}$$
+
+$$
+\vec{u}_{i \to i+1} = \frac{P_{i+1} - P_i}{\lVert P_{i+1} - P_i \rVert}
+$$
 
 ---
 
@@ -182,13 +253,29 @@ flowchart LR
 
 In many codebases, developers attempt to write a single generic utility method (e.g. `Get3DDirection(planDirection, zIn, zOut, length)`) and apply it across all families. While mathematically valid for a right triangle, this approach suffers from serious architectural flaws when applied universally across Revit.
 
-```
-       Generic Vector Assumption:                      Revit Architecture Reality:
- ┌────────────────────────────────────┐         ┌───────────────────────────────────────┐
- │ 3D Vector = PlanDir + (ΔZ / L)     │   ≠     │ Level-Hosted: Z constrained to level  │
- │ (Assumes 3D Cartesian translation) │         │ Face-Hosted : Z aligned to FaceNormal │
- └────────────────────────────────────┘         │ Curve-Based : Z embedded in 3D curve  │
-                                                └───────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Generic["❌ Generic Vector Assumption"]
+        direction TB
+        G1["3D Vector = PlanDir + (ΔZ / L)"]
+        G2["Assumes uniform 3D Cartesian<br/>translation applies to every family"]
+        G1 --> G2
+    end
+
+    subgraph Reality["✔ Revit Architecture Reality"]
+        direction TB
+        R1["Level-Hosted: Z constrained to Level,<br/>slope lives in instance parameters"]
+        R2["Face-Hosted: Z aligned<br/>to Face Normal"]
+        R3["Curve-Based: Z embedded<br/>directly in 3D curve endpoints"]
+        R1 --> R2 --> R3
+    end
+
+    Generic -. does not match .-> Reality
+
+    classDef bad fill:#4a3b3b,stroke:#b88f8f,color:#e8edf2;
+    classDef good fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    class G1,G2 bad
+    class R1,R2,R3 good
 ```
 
 ### The 6 Fatal Assumptions of the Universal `Get3DDirection` Method
@@ -211,18 +298,25 @@ Use this programmatic pattern to determine the exact placement and direction ext
 ```mermaid
 flowchart TD
     Start["Inspect FamilySymbol / FamilyInstance"] --> CheckFace{"FamilyPlacementType ==<br/>WorkPlaneBased?"}
-    
+
     CheckFace -- Yes --> FaceStrat["Strategy: FaceHosted<br/>• Read Face Normal N<br/>• Read Transform.BasisZ & BasisX"]
     CheckFace -- No --> CheckCurve{"FamilyPlacementType ==<br/>CurveBased or CurveDriven?"}
-    
-    CheckCurve -- Yes --> CurveStrat["Strategy: LineBased3D<br/>• Read LocationCurve.Curve<br/>• Direction = (P2 - P1).Normalize()"]
+
+    CheckCurve -- Yes --> CurveStrat["Strategy: LineBased3D<br/>• Read LocationCurve.Curve<br/>• Direction = (P2 − P1).Normalize()"]
     CheckCurve -- No --> CheckAdaptive{"FamilyPlacementType ==<br/>Adaptive?"}
-    
+
     CheckAdaptive -- Yes --> AdaptStrat["Strategy: AdaptiveMultiPoint<br/>• Read ReferencePoint.Position"]
     CheckAdaptive -- No --> CheckParams{"OneLevelBased AND<br/>Has Elevation Parameters?"}
-    
-    CheckParams -- Yes --> ParamStrat["Strategy: LevelHostedParameterized<br/>• Advance (X,Y) by L * cos(α)<br/>• Write Infeed/Outfeed Parameters<br/>• Do NOT elevate insertion Z"]
+
+    CheckParams -- Yes --> ParamStrat["Strategy: LevelHostedParameterized<br/>• Advance (X,Y) by L·cos(α)<br/>• Write Infeed/Outfeed Parameters<br/>• Do NOT elevate insertion Z"]
     CheckParams -- No --> FreeStrat["Strategy: StandardLevelOrFree3D<br/>• Read Transform.BasisX / HandOrientation"]
+
+    classDef decision fill:#2f3b46,stroke:#7ea3a0,color:#e8edf2;
+    classDef strat fill:#3b4a5a,stroke:#8fa3b8,color:#e8edf2;
+    classDef paramStrat fill:#4a3b3b,stroke:#b88f8f,color:#e8edf2;
+    class Start,CheckFace,CheckCurve,CheckAdaptive,CheckParams decision
+    class FaceStrat,CurveStrat,AdaptStrat,FreeStrat strat
+    class ParamStrat paramStrat
 ```
 
 ```csharp
