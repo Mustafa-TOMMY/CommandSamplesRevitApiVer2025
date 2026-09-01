@@ -61,12 +61,12 @@ The following matrix classifies all family and placement cases in Revit, definin
 
 | Case # | Family & Placement Architecture | Creation API / Hosting Type | Available Geometric Information | How to Determine 3D Direction Vector | Additional Parameters / Data Required | Limitations & Constraints |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Level-Hosted Point Family**<br>(Conveyors, Box Families, Free-Standing Equipment) | `NewFamilyInstance(XYZ, symbol, Level, NonStructural)`<br>`FamilyPlacementType.OneLevelBased` | • `LocationPoint.Point`<br>• `LocationPoint.Rotation` (plan angle θ)<br>• `HandOrientation` / `FacingOrientation` (Z component = 0) | **Reconstruct via Parameterized Math** — see full equations in Section 5, Case 1:<br>Combine the plan rotation angle with the slope angle derived from `(Z_out − Z_in) / Length` to build the 3D unit vector. | `Infeed_Elevation`, `Outfeed_Elevation`, `Length` (instance parameters) | `LocationPoint.Rotation` is a 1D scalar about global Z; slope is **not** stored in Revit's transform matrix. Translating origin in Z + writing parameters causes **double-elevation**. |
-| **2** | **Face-Hosted / Work-Plane Family**<br>(Guard Rails, Brackets, Face Mounted Fixtures) | `NewFamilyInstance(Face, XYZ, XYZ, symbol)`<br>`FamilyPlacementType.WorkPlaneBased` | • Host `Face`<br>• `Face.ComputeNormal(uv)`<br>• In-plane reference direction (`d_ref`)<br>• `GetTransform().BasisZ` | **Direct Extraction from Transform / Face** — see full equations in Section 5, Case 2:<br>Local Z = face normal; local X = reference direction projected onto the face plane; local Y = Z × X. | Valid host `Face` and in-plane reference vector | Requires `Always Vertical = False` in `.rfa`. If `Always Vertical = True`, Revit forces `BasisZ` to (0, 0, 1) even on a sloped face. |
-| **3** | **Curve-Based Family (Linear)**<br>(Walls, Beams, Ducts, Pipes, Line-Based Loadable) | `NewFamilyInstance(Curve, symbol, Level, ...)`<br>`Wall.Create(doc, Curve, ...)`<br>`FamilyPlacementType.CurveBased` | • `LocationCurve.Curve`<br>• Start Point: `Curve.GetEndPoint(0)`<br>• End Point: `Curve.GetEndPoint(1)` | **Direct Native Vector Subtraction** — see full equations in Section 5, Case 3:<br>Direction = (EndPoint − StartPoint), normalized.<br>Or `Line.Direction` / `ComputeDerivatives` | None (native curve geometry) | Casting `Location` to `LocationPoint` throws `InvalidCastException`. True 3D slope is encoded directly in curve coordinates. |
-| **4** | **Free 3D Spatial Component**<br>(Unhosted 3D equipment, tilted structural braces) | `NewFamilyInstance(XYZ, symbol, StructuralType)` + 3D Axis Rotation<br>`Always Vertical = False` | • `GetTransform().BasisX`<br>• `GetTransform().BasisY`<br>• `GetTransform().BasisZ`<br>• `GetTransform().Origin` | **Direct 3D Matrix Basis Read** — see full equations in Section 5, Case 4:<br>Longitudinal = `Transform.BasisX`<br>Transverse = `Transform.BasisY`<br>Up/Normal = `Transform.BasisZ` | Requires 3D rotation via `ElementTransformUtils.RotateElement` | Family Editor setting `FAMILY_ALWAYS_VERTICAL` must be explicitly set to `0` (False). |
-| **5** | **MEP Connected Family**<br>(Pumps, Air Handlers, Valves, Connected Machinery) | Point-based or Hosted, but equipped with `MEPModel` connectors | • `MEPModel.ConnectorManager`<br>• `Connector.Origin`<br>• `Connector.CoordinateSystem.BasisZ` | **Direct Connector Port Orientation** — see full equations in Section 5, Case 5:<br>Flow direction = `Connector.CoordinateSystem.BasisZ`<br>Port position = `Connector.Origin` | `MEPModel` must not be null | Connector directions represent fluid/electrical flow vectors, independent of the family insertion origin. |
-| **6** | **Adaptive Multi-Point Family**<br>(Complex trusses, curved conveyors, panels) | `AdaptiveComponentInstanceUtils.CreateAdaptiveComponentInstance`<br>`FamilyPlacementType.Adaptive` | • `AdaptiveComponentInstanceUtils`<br>• Ordered `ReferencePoint` element IDs<br>• `ReferencePoint.Position` (XYZ) | **Point-to-Point Vector Reconstruction** — see full equation in Section 5, Case 6:<br>Direction = (NextPoint − CurrentPoint), normalized, for each consecutive pair of `ReferencePoint.Position` values. | None (read from placement point elements) | `Location` is `null` or degenerate; cannot use `LocationPoint` or `LocationCurve`. Position is defined solely by placement points. |
+| **1** | **Level-Hosted Point Family**<br>(Conveyors, Box Families, Free-Standing Equipment) | `NewFamilyInstance(XYZ, symbol, Level, NonStructural)`<br>`FamilyPlacementType.OneLevelBased` | • `LocationPoint.Point`<br>• `LocationPoint.Rotation` (plan angle θ)<br>• `HandOrientation` / `FacingOrientation` (Z component = 0) | **Reconstruct via Parameterized Math** — see Section 5.1 & Section 6.1:<br>Combine plan rotation angle with slope angle derived from `(Z_out − Z_in) / Length` to construct 3D unit vector. | `Infeed_Elevation`, `Outfeed_Elevation`, `Length` (instance parameters) | `LocationPoint.Rotation` is 1D scalar about global Z; slope is **not** stored in Revit's transform matrix. Translating origin in Z + writing parameters causes **double-elevation**. |
+| **2** | **Face-Hosted / Work-Plane Family**<br>(Guard Rails, Brackets, Face Mounted Fixtures) | `NewFamilyInstance(Face, XYZ, XYZ, symbol)`<br>`FamilyPlacementType.WorkPlaneBased` | • Host `Face`<br>• `Face.ComputeNormal(uv)`<br>• In-plane reference direction (`d_ref`)<br>• `GetTransform().BasisZ` | **Direct Extraction from Transform / Face** — see Section 5.2 & Section 6.2:<br>Local Z = face normal; local X = reference direction projected onto face plane; local Y = Z × X. | Valid host `Face` and in-plane reference vector | Requires `Always Vertical = False` in `.rfa`. If `Always Vertical = True`, Revit forces `BasisZ` to (0, 0, 1) even on a sloped face. |
+| **3** | **Curve-Based Family (Linear)**<br>(Walls, Beams, Ducts, Pipes, Line-Based Loadable) | `NewFamilyInstance(Curve, symbol, Level, ...)`<br>`Wall.Create(doc, Curve, ...)`<br>`FamilyPlacementType.CurveBased` | • `LocationCurve.Curve`<br>• Start Point: `Curve.GetEndPoint(0)`<br>• End Point: `Curve.GetEndPoint(1)` | **Direct Native Vector Subtraction** — see Section 5.3 & Section 6.3:<br>Direction = (EndPoint − StartPoint), normalized.<br>Or `Line.Direction` / `ComputeDerivatives` | None (native curve geometry) | Casting `Location` to `LocationPoint` throws `InvalidCastException`. True 3D slope is encoded directly in curve coordinates. |
+| **4** | **Free 3D Spatial Component**<br>(Unhosted 3D equipment, tilted structural braces) | `NewFamilyInstance(XYZ, symbol, StructuralType)` + 3D Axis Rotation<br>`Always Vertical = False` | • `GetTransform().BasisX`<br>• `GetTransform().BasisY`<br>• `GetTransform().BasisZ`<br>• `GetTransform().Origin` | **Direct 3D Matrix Basis Read** — see Section 5.4 & Section 6.4:<br>Longitudinal = `Transform.BasisX`<br>Transverse = `Transform.BasisY`<br>Up/Normal = `Transform.BasisZ` | Requires 3D rotation via `ElementTransformUtils.RotateElement` | Family Editor setting `FAMILY_ALWAYS_VERTICAL` must be explicitly set to `0` (False). |
+| **5** | **MEP Connected Family**<br>(Pumps, Air Handlers, Valves, Connected Machinery) | Point-based or Hosted, but equipped with `MEPModel` connectors | • `MEPModel.ConnectorManager`<br>• `Connector.Origin`<br>• `Connector.CoordinateSystem.BasisZ` | **Direct Connector Port Orientation** — see Section 5.5 & Section 6.5:<br>Flow direction = `Connector.CoordinateSystem.BasisZ`<br>Port position = `Connector.Origin` | `MEPModel` must not be null | Connector directions represent fluid/electrical flow vectors, independent of the family insertion origin. |
+| **6** | **Adaptive Multi-Point Family**<br>(Complex trusses, curved conveyors, panels) | `AdaptiveComponentInstanceUtils.CreateAdaptiveComponentInstance`<br>`FamilyPlacementType.Adaptive` | • `AdaptiveComponentInstanceUtils`<br>• Ordered `ReferencePoint` element IDs<br>• `ReferencePoint.Position` (XYZ) | **Point-to-Point Vector Reconstruction** — see Section 5.6 & Section 6.5:<br>Direction = (NextPoint − CurrentPoint), normalized, for each consecutive pair of `ReferencePoint.Position` values. | None (read from placement point elements) | `Location` is `null` or degenerate; cannot use `LocationPoint` or `LocationCurve`. Position is defined solely by placement points. |
 | **7** | **Two-Level Structural Member**<br>(Vertical vs. Slanted Structural Columns) | `NewFamilyInstance(XYZ, symbol, baseLvl, topLvl, Column)`<br>`FamilyPlacementType.TwoLevelsBased` | • `SLANTED_COLUMN_TYPE_PARAM`<br>• Vertical: `LocationPoint`<br>• Slanted: `LocationCurve` | **Dynamic Type Check:**<br>• If Vertical: direction = (0, 0, 1)<br>• If Slanted: direction = `LocationCurve.Curve.Direction` | Built-in parameter `SLANTED_COLUMN_TYPE_PARAM` | When slanted, Revit converts `Location` from `LocationPoint` to `LocationCurve` on the fly. Blind casting throws `InvalidCastException`. |
 
 ---
@@ -108,7 +108,7 @@ $$
 \vec{u}_{\text{3D}} = \left( \cos\theta_{\text{plan}} \cdot \cos\alpha,\ \sin\theta_{\text{plan}} \cdot \cos\alpha,\ \sin\alpha \right)
 $$
 
-5. **Key Code Implementation:** Implemented in [`GeometryUtils.Get3DDirection`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Utilities/GeometryUtils.cs#L22-L72) and [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs).
+5. **Key Code Implementation:** Implemented in [`TransformGeometryUtils.Get3DDirection`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs#L125-L165) and [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs).
 
 ---
 
@@ -146,7 +146,7 @@ $$
 \hat{Y}_{\text{local}} = \hat{Z}_{\text{local}} \times \hat{X}_{\text{local}}
 $$
 
-5. **Key Code Implementation:** Implemented in [`GeometryUtils.GetGuardRailReferenceDirection`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Utilities/GeometryUtils.cs#L74-L101) and [`PlacementService.PlaceHostedInstance`](file:///C:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RailConverter/RailConverter/Services/PlacementService.cs#L39-L74).
+5. **Key Code Implementation:** Implemented in [`TransformGeometryUtils.GetGuardRailReferenceDirection`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs#L235-L250) and [`TransformGeometryUtils.GetTopFace`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs#L190-L230).
 
 ---
 
@@ -223,7 +223,7 @@ $$
 \vec{u}_{\text{flow}} = \text{Connector.CoordinateSystem.BasisZ}
 $$
 
-5. **Key Code Implementation:** Implemented in [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs#L50-L70).
+5. **Key Code Implementation:** Implemented in [`TransformGeometryUtils.GetConnectorDirections`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs#L260-L280) and [`GetLocationPointEndPointCommand.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Commands/GetLocationPointEndPointCommand.cs#L123-L138).
 
 ---
 
@@ -238,6 +238,8 @@ $$
 \vec{u}_{i \to i+1} = \frac{P_{i+1} - P_i}{\lVert P_{i+1} - P_i \rVert}
 $$
 
+5. **Key Code Implementation:** Implemented in [`TransformGeometryUtils.GetAdaptivePlacementPoints`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs#L282-L300).
+
 ---
 
 ### Case 7: Two-Level Structural Column (`TwoLevelsBased`)
@@ -249,7 +251,405 @@ $$
 
 ---
 
-## 6. Critical Investigation: Why a Single "Generic `Get3DDirection`" Method is Flawed
+## 6. Side-by-Side Code Implementation Comparison Across All Placement Types
+
+The following section contrasts the concrete C# code implementations for each of the placement paradigms, highlighting common anti-patterns vs. production BIM patterns.
+
+### 6.1 Level-Hosted Parameterized Placement vs. The Double-Elevation Bug
+
+```csharp
+// ============================================================================
+// ❌ WRONG: Applying Generic 3D Vectors to Level-Hosted Families
+// ============================================================================
+public void PlaceConveyor_AntiPattern(Document doc, FamilySymbol symbol, Level level, 
+                                      XYZ startPoint, Point3D dir3D, double length, double zIn, double zOut)
+{
+    // Bug 1: Elevating insertion point Z by deltaZ
+    XYZ elevatedInsertionPoint = startPoint + new XYZ(dir3D.X * length, dir3D.Y * length, dir3D.Z * length);
+    
+    FamilyInstance inst = doc.Create.NewFamilyInstance(
+        elevatedInsertionPoint, symbol, level, StructuralType.NonStructural);
+    
+    // Bug 2: Setting Infeed Elevation to zIn on an ALREADY elevated instance origin
+    // Result: Geometry rises twice (2 x deltaZ), detaching from adjacent equipment!
+    inst.LookupParameter("ILUS_Infeed_Elevation")?.Set(zIn);
+    inst.LookupParameter("ILUS_Outfeed_Elevation")?.Set(zOut);
+}
+
+// ============================================================================
+// ✔ CORRECT: Horizontal Footprint + Parameterized Rise (BIM Pattern)
+// ============================================================================
+public FamilyInstance PlaceConveyor_ProductionPattern(Document doc, FamilySymbol symbol, Level level, 
+                                                      XYZ startPoint, double planRotationAngle, 
+                                                      double length, double zIn, double zOut)
+{
+    // Step 1: Compute true 3D direction and horizontal footprint run
+    Point3D planDir = new Point3D(Math.Cos(planRotationAngle), Math.Sin(planRotationAngle), 0);
+    Point3D dir3D = TransformGeometryUtils.Get3DDirection(planDir, zIn, zOut, length);
+    
+    // Step 2: Keep insertion Z constrained strictly to Level (or Level + Base Offset)
+    XYZ levelInsertionPoint = new XYZ(startPoint.X, startPoint.Y, level.Elevation);
+    
+    FamilyInstance inst = doc.Create.NewFamilyInstance(
+        levelInsertionPoint, symbol, level, StructuralType.NonStructural);
+    
+    // Step 3: Rotate instance in plan about global Z
+    ElementTransformUtils.RotateElement(
+        doc, inst.Id, 
+        Line.CreateBound(levelInsertionPoint, levelInsertionPoint + XYZ.BasisZ), 
+        planRotationAngle);
+    
+    // Step 4: Drive slope purely through parameters (Revit handles internal geometry rise)
+    inst.LookupParameter("Length")?.Set(length);
+    inst.LookupParameter("ILUS_Infeed_Elevation")?.Set(zIn);
+    inst.LookupParameter("ILUS_Outfeed_Elevation")?.Set(zOut);
+    
+    return inst;
+}
+```
+
+---
+
+### 6.2 Face-Hosted Work-Plane Placement (Guard Rail on Sloped Top Face)
+
+```csharp
+// ============================================================================
+// Placement on Inclined Host Face (Guard Rails, Brackets)
+// ============================================================================
+public FamilyInstance PlaceFaceHostedComponent(Document doc, FamilyInstance hostConveyor, 
+                                               FamilySymbol railSymbol, double offsetAlongConveyor)
+{
+    // 1. Detect host top face and extract world normal
+    Face topFace = TransformGeometryUtils.GetTopFace(hostConveyor, out Point3D faceOrigin, out Point3D faceNormal);
+    if (topFace == null) throw new InvalidOperationException("Host conveyor has no valid planar top face.");
+
+    // 2. Derive longitudinal travel direction from host instance
+    Point3D hostDir = TransformGeometryUtils.GetFacingDirection(hostConveyor);
+
+    // 3. Project longitudinal direction onto the sloped face plane to get in-plane reference vector
+    Point3D refDir = TransformGeometryUtils.GetGuardRailReferenceDirection(hostDir, faceNormal);
+
+    // 4. Calculate placement point on sloped face
+    Point3D hostOrigin = TransformGeometryUtils.GetOrigin(hostConveyor);
+    Point3D rawPlacementPoint = hostOrigin + (hostDir * offsetAlongConveyor);
+    Point3D faceSnappedPoint = TransformGeometryUtils.ProjectToPlaneVertically(rawPlacementPoint, faceOrigin, faceNormal);
+
+    // 5. Place face-hosted instance
+    FamilyInstance railInstance = doc.Create.NewFamilyInstance(
+        topFace, 
+        TransformGeometryUtils.ToXYZ(faceSnappedPoint), 
+        TransformGeometryUtils.ToXYZ(refDir), 
+        railSymbol);
+
+    return railInstance;
+}
+```
+
+---
+
+### 6.3 Line-Based 3D Curve Placement (`PlanPlacements3D`)
+
+```csharp
+// ============================================================================
+// Placement of Consecutive 3D Line-Based Segments (CurveBased Families)
+// ============================================================================
+public List<FamilyInstance> Place3DLineBasedRun(Document doc, FamilySymbol lineBasedSymbol, Level level,
+                                                Point3D infeedOrigin, Point3D planDirection,
+                                                double zIn, double zOut, double totalRunLength,
+                                                IReadOnlyList<double> segmentLengths)
+{
+    // 1. Calculate overall 3D direction vector
+    Point3D dir3D = TransformGeometryUtils.Get3DDirection(planDirection, zIn, zOut, totalRunLength);
+
+    // 2. Generate consecutive 3D endpoints (P1, P2) for each segment
+    List<(Point3D P1, Point3D P2)> placements = TransformGeometryUtils.PlanPlacements3D(
+        infeedOrigin, dir3D, segmentLengths);
+
+    var createdInstances = new List<FamilyInstance>();
+
+    // 3. Create 3D bound lines and instantiate curve-based families
+    foreach (var (p1, p2) in placements)
+    {
+        Line curve3D = Line.CreateBound(
+            TransformGeometryUtils.ToXYZ(p1), 
+            TransformGeometryUtils.ToXYZ(p2));
+
+        FamilyInstance inst = doc.Create.NewFamilyInstance(
+            curve3D, lineBasedSymbol, level, StructuralType.NonStructural);
+
+        createdInstances.Add(inst);
+    }
+
+    return createdInstances;
+}
+```
+
+---
+
+### 6.4 Free 3D Unhosted Component with 3D Axis Rotation
+
+```csharp
+// ============================================================================
+// Free 3D Component Placement (Always Vertical = False)
+// ============================================================================
+public FamilyInstance PlaceFree3DComponent(Document doc, FamilySymbol symbol, XYZ insertionPoint, 
+                                           XYZ planDirection, double pitchAngleRadians)
+{
+    // Precondition: FAMILY_ALWAYS_VERTICAL must be 0 in family definition
+    Parameter verticalParam = symbol.Family.get_Parameter(BuiltInParameter.FAMILY_ALWAYS_VERTICAL);
+    if (verticalParam != null && verticalParam.AsInteger() != 0)
+    {
+        throw new InvalidOperationException("Family must have 'Always Vertical' unchecked in Family Editor.");
+    }
+
+    // 1. Place instance at insertion XYZ
+    FamilyInstance inst = doc.Create.NewFamilyInstance(insertionPoint, symbol, StructuralType.NonStructural);
+    doc.Regenerate();
+
+    // 2. Create rotation axis perpendicular to plan direction in horizontal plane
+    XYZ rotationAxisDir = new XYZ(-planDirection.Y, planDirection.X, 0).Normalize();
+    Line pitchAxis = Line.CreateBound(insertionPoint, insertionPoint + rotationAxisDir);
+
+    // 3. Rotate element in 3D around pitch axis
+    ElementTransformUtils.RotateElement(doc, inst.Id, pitchAxis, pitchAngleRadians);
+    doc.Regenerate();
+
+    // 4. Verify true 3D tilt via BasisZ
+    Transform tf = inst.GetTransform();
+    XYZ actualUpVector = tf.BasisZ; // Local normal now tilts in world space
+
+    return inst;
+}
+```
+
+---
+
+### 6.5 MEP Flow Vectors & Slanted Structural Columns
+
+```csharp
+// ============================================================================
+// MEP Flow Extraction vs. Slanted Column Location Curve
+// ============================================================================
+public static void AnalyzeSpecializedOrientations(Element element)
+{
+    // A. MEP Connected Equipment
+    if (element is FamilyInstance fi && fi.MEPModel?.ConnectorManager != null)
+    {
+        foreach (Connector conn in fi.MEPModel.ConnectorManager.Connectors)
+        {
+            XYZ portOrigin = conn.Origin;
+            XYZ flowDirection = conn.CoordinateSystem.BasisZ; // Authoritative flow vector
+        }
+    }
+
+    // B. Two-Level Structural Columns (Dynamic Location Type Switching)
+    if (element is FamilyInstance col && col.StructuralType == StructuralType.Column)
+    {
+        Parameter slantedParam = col.get_Parameter(BuiltInParameter.SLANTED_COLUMN_TYPE_PARAM);
+        int slantedType = slantedParam?.AsInteger() ?? 0; // 0 = Vertical, 1 = Angle, 2 = EndPoint
+
+        if (slantedType != 0 && col.Location is LocationCurve locCurve)
+        {
+            // Slanted column exposes LocationCurve
+            XYZ p1 = locCurve.Curve.GetEndPoint(0);
+            XYZ p2 = locCurve.Curve.GetEndPoint(1);
+            XYZ columnAxis = (p2 - p1).Normalize();
+        }
+        else if (col.Location is LocationPoint locPoint)
+        {
+            // Vertical column exposes LocationPoint
+            XYZ basePoint = locPoint.Point;
+            XYZ verticalAxis = XYZ.BasisZ;
+        }
+    }
+}
+```
+
+---
+
+## 7. Master Spatial Helpers: The Complete `TransformGeometryUtils` Reference Library
+
+The complete implementation is available directly in [`TransformGeometryUtils.cs`](file:///c:/Users/Mostafa.Badr/Downloads/00/00-%20Repos/RevitSamples/RevitApiSamples/Samples/Transform/Helpers/TransformGeometryUtils.cs):
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Autodesk.Revit.DB;
+
+namespace RevitApiSamples.Samples.Transform.Helpers
+{
+    /// <summary>
+    /// Lightweight 3D point/vector struct used for pre-Revit geometric and spatial calculations.
+    /// Deliberately independent of Autodesk.Revit.DB.XYZ so spatial algorithms
+    /// can be unit-tested without a running Revit session.
+    /// </summary>
+    public readonly struct Point3D : IEquatable<Point3D>
+    {
+        public double X { get; }
+        public double Y { get; }
+        public double Z { get; }
+
+        public static Point3D Zero => new Point3D(0, 0, 0);
+        public static Point3D BasisX => new Point3D(1, 0, 0);
+        public static Point3D BasisY => new Point3D(0, 1, 0);
+        public static Point3D BasisZ => new Point3D(0, 0, 1);
+
+        public Point3D(double x, double y, double z)
+        {
+            X = x; Y = y; Z = z;
+        }
+
+        public double Length => Math.Sqrt(X * X + Y * Y + Z * Z);
+        public Point3D Normalized()
+        {
+            double len = Length;
+            return len < 1e-9 ? Zero : new Point3D(X / len, Y / len, Z / len);
+        }
+
+        public double DotProduct(Point3D other) => X * other.X + Y * other.Y + Z * other.Z;
+        public Point3D CrossProduct(Point3D other) =>
+            new Point3D(Y * other.Z - Z * other.Y, Z * other.X - X * other.Z, X * other.Y - Y * other.X);
+
+        public static Point3D operator +(Point3D a, Point3D b) => new Point3D(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+        public static Point3D operator -(Point3D a, Point3D b) => new Point3D(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+        public static Point3D operator *(Point3D a, double s) => new Point3D(a.X * s, a.Y * s, a.Z * s);
+
+        public bool Equals(Point3D other) =>
+            Math.Abs(X - other.X) < 1e-7 && Math.Abs(Y - other.Y) < 1e-7 && Math.Abs(Z - other.Z) < 1e-7;
+
+        public override bool Equals(object? obj) => obj is Point3D other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(X, Y, Z);
+        public override string ToString() => $"({X:F3}, {Y:F3}, {Z:F3})";
+    }
+
+    /// <summary>
+    /// Master spatial and geometric utility library implementing the 3D Vector & Family Placement Architecture.
+    /// </summary>
+    public static class TransformGeometryUtils
+    {
+        public static Point3D ToPoint3D(XYZ xyz) => new Point3D(xyz.X, xyz.Y, xyz.Z);
+        public static XYZ ToXYZ(Point3D p) => new XYZ(p.X, p.Y, p.Z);
+
+        public static Point3D GetFacingDirection(FamilyInstance instance)
+        {
+            Transform transform = instance.GetTotalTransform();
+            return ToPoint3D(transform.BasisX).Normalized();
+        }
+
+        public static Point3D GetOrigin(FamilyInstance instance)
+        {
+            if (instance.Location is LocationPoint lp) return ToPoint3D(lp.Point);
+            throw new InvalidOperationException($"Instance '{instance.Name}' missing LocationPoint.");
+        }
+
+        public static Point3D Get3DDirection(Point3D planDirection, double zIn, double zOut, double totalLength)
+        {
+            if (totalLength <= 1e-9) throw new ArgumentException("Total length must be positive.", nameof(totalLength));
+            double horizLen = Math.Sqrt(planDirection.X * planDirection.X + planDirection.Y * planDirection.Y);
+            if (horizLen < 1e-9) throw new ArgumentException("Plan direction must have non-zero horizontal component.", nameof(planDirection));
+
+            double deltaZ = zOut - zIn;
+            double sinAlpha = Math.Max(-1.0, Math.Min(1.0, deltaZ / totalLength));
+            double cosAlpha = Math.Sqrt(Math.Max(0.0, 1.0 - sinAlpha * sinAlpha));
+
+            return new Point3D((planDirection.X / horizLen) * cosAlpha, (planDirection.Y / horizLen) * cosAlpha, sinAlpha);
+        }
+
+        public static List<(Point3D P1, Point3D P2)> PlanPlacements3D(Point3D origin, Point3D dir3D, IReadOnlyList<double> segmentLengths)
+        {
+            var placements = new List<(Point3D P1, Point3D P2)>(segmentLengths.Count);
+            double offset = 0.0;
+            foreach (double len in segmentLengths)
+            {
+                Point3D p1 = origin + (dir3D * offset);
+                Point3D p2 = p1 + (dir3D * len);
+                placements.Add((p1, p2));
+                offset += len;
+            }
+            return placements;
+        }
+
+        public static Face? GetTopFace(FamilyInstance instance, out Point3D origin, out Point3D normal)
+        {
+            origin = Point3D.Zero; normal = Point3D.BasisZ;
+            var options = new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine };
+            GeometryElement? geoElement = instance.get_Geometry(options);
+            if (geoElement == null) return null;
+
+            var faces = new List<(PlanarFace Face, XYZ WorldNormal, XYZ WorldOrigin)>();
+            CollectPlanarFaces(geoElement, Transform.Identity, faces);
+
+            XYZ instanceUp = instance.GetTransform().OfVector(XYZ.BasisZ).Normalize();
+            var best = faces.Where(f => f.WorldNormal.DotProduct(instanceUp) > 0.5)
+                            .OrderByDescending(f => f.Face.Area)
+                            .FirstOrDefault();
+
+            if (best.Face == null) return null;
+            origin = ToPoint3D(best.WorldOrigin);
+            normal = ToPoint3D(best.WorldNormal);
+            return best.Face;
+        }
+
+        private static void CollectPlanarFaces(GeometryElement geoElem, Transform currentTransform, List<(PlanarFace Face, XYZ WorldNormal, XYZ WorldOrigin)> faces)
+        {
+            foreach (GeometryObject geoObj in geoElem)
+            {
+                if (geoObj is Solid solid && solid.Volume > 0)
+                {
+                    foreach (Face face in solid.Faces)
+                    {
+                        if (face is PlanarFace pf)
+                            faces.Add((pf, currentTransform.OfVector(pf.FaceNormal).Normalize(), currentTransform.OfPoint(pf.Origin)));
+                    }
+                }
+                else if (geoObj is GeometryInstance geoInst)
+                {
+                    GeometryElement? symGeo = geoInst.GetSymbolGeometry();
+                    if (symGeo != null) CollectPlanarFaces(symGeo, currentTransform.Multiply(geoInst.Transform), faces);
+                }
+            }
+        }
+
+        public static Point3D GetGuardRailReferenceDirection(Point3D longitudinalDirection, Point3D topFaceNormal)
+        {
+            Point3D horizontal = new Point3D(longitudinalDirection.X, longitudinalDirection.Y, 0);
+            horizontal = horizontal.Length < 1e-9 ? Point3D.BasisX : horizontal.Normalized();
+            double dot = horizontal.DotProduct(topFaceNormal);
+            Point3D dir = horizontal - (topFaceNormal * dot);
+            return dir.Length < 1e-9 ? horizontal : dir.Normalized();
+        }
+
+        public static Point3D ProjectToPlaneVertically(Point3D point, Point3D planeOrigin, Point3D planeNormal)
+        {
+            if (Math.Abs(planeNormal.Z) < 1e-9) return point;
+            Point3D delta = planeOrigin - point;
+            double t = delta.DotProduct(planeNormal) / planeNormal.Z;
+            return new Point3D(point.X, point.Y, point.Z + t);
+        }
+
+        public static PlacementStrategy DetermineStrategy(FamilySymbol symbol)
+        {
+            Family family = symbol.Family;
+            if (family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased) return PlacementStrategy.FaceHosted;
+            if (family.FamilyPlacementType == FamilyPlacementType.CurveBased || family.FamilyPlacementType == FamilyPlacementType.CurveDrivenStructural) return PlacementStrategy.LineBased3D;
+            if (family.FamilyPlacementType == FamilyPlacementType.Adaptive) return PlacementStrategy.AdaptiveMultiPoint;
+
+            bool hasElevationParams = symbol.LookupParameter("ILUS_Infeed_Elevation") != null || symbol.LookupParameter("Infeed_Elevation") != null;
+            if (family.FamilyPlacementType == FamilyPlacementType.OneLevelBased && hasElevationParams) return PlacementStrategy.LevelHostedParameterized;
+
+            Parameter? alwaysVert = family.get_Parameter(BuiltInParameter.FAMILY_ALWAYS_VERTICAL);
+            if (alwaysVert != null && alwaysVert.AsInteger() == 0) return PlacementStrategy.Free3DSpatial;
+
+            return PlacementStrategy.StandardLevel2D;
+        }
+    }
+}
+```
+
+---
+
+## 8. Critical Investigation: Why a Single "Generic `Get3DDirection`" Method is Flawed
 
 In many codebases, developers attempt to write a single generic utility method (e.g. `Get3DDirection(planDirection, zIn, zOut, length)`) and apply it across all families. While mathematically valid for a right triangle, this approach suffers from serious architectural flaws when applied universally across Revit.
 
@@ -284,14 +684,14 @@ flowchart TB
 | :-: | :--- | :--- | :--- |
 | **1** | **Assumes Infeed / Outfeed Parameters Always Exist** | Infeed/Outfeed elevation parameters are custom, application-specific conventions (e.g. `ILUS_Infeed_Elevation`). 99% of Revit families (doors, beams, ducts, equipment) do **not** have these parameters. | `NullReferenceException` or failure to resolve elevation data. |
 | **2** | **Assumes Level-Based Placement Model** | If applied to a Face-Hosted family (e.g. Guard Rail on inclined top face), the generic method ignores the host face orientation and attempts to calculate a direction from global horizontal plan vectors. | Orientation mismatch; guard rails fail to align with the conveyor surface. |
-| **3** | **The Double-Elevation Defect** | Level-hosted families use internal parametric geometry elevation. If code translates the insertion point by the 3D direction vector times length (raising the origin's Z by ΔZ) AND writes `Infeed_Elevation = Z`, the family raises itself relative to an already elevated origin. | Geometry is elevated **twice** (2 × ΔZ), breaking connections. |
+| **3** | **The Double-Elevation Defect** | Level-hosted families use internal parametric geometry elevation. If code translates the insertion point by the 3D direction vector times length (raising origin Z by ΔZ) AND writes `Infeed_Elevation = Z`, the family raises itself relative to an already elevated origin. | Geometry is elevated **twice** (2 × ΔZ), breaking connections. |
 | **4** | **Destroys Native Revit Geometric References** | Curve-based elements (`LocationCurve`) and MEP elements (`MEPModel`) already store true 3D vectors natively. Reconstructing them via 2D plan trigonometry throws away Revit's authoritative geometric data. | Loss of curve curvature, tangent vectors, and port flow directions. |
 | **5** | **Fails on Non-Planar / Rotated Work Planes** | `LocationPoint.Rotation` is a 1D scalar. For face-hosted families on tilted surfaces with `Always Vertical = False`, `Rotation` is relative to the **tilted local Z-axis**, not global Z. | Incorrect trigonometry results; vectors misaligned with actual model geometry. |
 | **6** | **Produces a Vector Revit Does Not Use** | The computed 3D vector may be mathematically sound, but Revit's constraint engine does not store or use that vector for the element's position. | False sense of correctness; code operates on hypothetical coordinates rather than Revit's actual instance transform. |
 
 ---
 
-## 7. Pre-Flight Family Strategy Selector (C# Architecture Pattern)
+## 9. Pre-Flight Family Strategy Selector (C# Architecture Pattern)
 
 Use this programmatic pattern to determine the exact placement and direction extraction strategy before executing geometric operations:
 
@@ -324,51 +724,14 @@ public static class FamilyPlacementInspector
 {
     public static PlacementStrategy DetermineStrategy(FamilySymbol symbol)
     {
-        Family family = symbol.Family;
-
-        // 1. Work-Plane / Face-Hosted
-        if (family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased)
-            return PlacementStrategy.FaceHosted;
-
-        // 2. Line-Based / Curve-Driven
-        if (family.FamilyPlacementType == FamilyPlacementType.CurveBased ||
-            family.FamilyPlacementType == FamilyPlacementType.CurveDrivenStructural)
-            return PlacementStrategy.LineBased3D;
-
-        // 3. Adaptive Component
-        if (family.FamilyPlacementType == FamilyPlacementType.Adaptive)
-            return PlacementStrategy.AdaptiveMultiPoint;
-
-        // 4. Level-Hosted with Parametric Elevation (Conveyor Pattern)
-        bool hasElevationParams = symbol.LookupParameter("ILUS_Infeed_Elevation") != null ||
-                                  symbol.LookupParameter("Infeed_Elevation") != null;
-
-        if (family.FamilyPlacementType == FamilyPlacementType.OneLevelBased && hasElevationParams)
-            return PlacementStrategy.LevelHostedParameterized;
-
-        // 5. Unconstrained 3D Component
-        Parameter alwaysVertical = family.get_Parameter(BuiltInParameter.FAMILY_ALWAYS_VERTICAL);
-        if (alwaysVertical != null && alwaysVertical.AsInteger() == 0)
-            return PlacementStrategy.Free3DSpatial;
-
-        return PlacementStrategy.StandardLevel2D;
+        return TransformGeometryUtils.DetermineStrategy(symbol);
     }
-}
-
-public enum PlacementStrategy
-{
-    LevelHostedParameterized, // Incline via parameters (Box Families)
-    FaceHosted,               // Incline via Face Normal (Guard Rail Families)
-    LineBased3D,              // Incline via 3D curve endpoints (Line-based struts)
-    AdaptiveMultiPoint,       // Incline via explicit ReferencePoints
-    Free3DSpatial,            // Incline via 3D matrix rotation
-    StandardLevel2D           // Flat horizontal placement
 }
 ```
 
 ---
 
-## 8. Learning Progression (Commands 01–11)
+## 10. Learning Progression (Commands 01–11)
 
 | # | Command File | Class Name | Main API | What It Teaches |
 | :---: | :--- | :--- | :--- | :--- |
@@ -386,7 +749,7 @@ public enum PlacementStrategy
 
 ---
 
-## 9. Command 10 — Comprehensive 3D End Point & Direction Extraction Recipe
+## 11. Command 10 — Comprehensive 3D End Point & Direction Extraction Recipe
 
 [`GetLocationPointEndPointCommand.cs`](Commands/GetLocationPointEndPointCommand.cs) demonstrates how to inspect a selected element, determine its placement architecture, and compute its 3D direction vector and End Point (Outfeed):
 
@@ -458,7 +821,7 @@ public class GetLocationPointEndPointCommand : IExternalCommand
 
 ---
 
-## 10. Summary & Best Practices
+## 12. Summary & Best Practices
 
 1. **Inspect `FamilyPlacementType` before attempting any vector calculation.**
 2. **Never cast `Location` blindly to `LocationPoint`** — curve-based families throw exceptions, and adaptive families return invalid references.
