@@ -4,7 +4,7 @@ using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
 using System.Text;
 
-namespace RevitApiSamples.Samples.TransformModule.Commands
+namespace RevitApiSamples.Samples.TransformModule.Commands.Fundamentals
 {
     // ============================================================================
     // Location Geometry Analysis Command

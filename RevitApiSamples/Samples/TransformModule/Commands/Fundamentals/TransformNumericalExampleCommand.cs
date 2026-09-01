@@ -4,7 +4,7 @@ using Autodesk.Revit.UI;
 using System;
 using System.Text;
 
-namespace RevitApiSamples.Samples.TransformModule.Commands
+namespace RevitApiSamples.Samples.TransformModule.Commands.Fundamentals
 {
     // ============================================================================
     // Transform Numerical Example Command

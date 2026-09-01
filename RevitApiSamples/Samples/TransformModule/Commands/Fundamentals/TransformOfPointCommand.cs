@@ -5,7 +5,7 @@ using Autodesk.Revit.UI.Selection;
 using System;
 using System.Text;
 
-namespace RevitApiSamples.Samples.TransformModule.Commands
+namespace RevitApiSamples.Samples.TransformModule.Commands.Fundamentals
 {
     // ============================================================================
     // Transform.OfPoint Command
