@@ -1,36 +1,41 @@
 # Transform Module
 
-> **Revit API 2025** &nbsp;|&nbsp; **Namespace:** `RevitApiSamples.Samples.TransformModule` &nbsp;|&nbsp; **Mode:** `[Transaction(TransactionMode.ReadOnly)]` &nbsp;|&nbsp; **Focus:** Coordinate Systems & Family Geometry
+> **Revit API 2025** &nbsp;|&nbsp; **Namespace:** `RevitApiSamples.Samples.TransformModule` &nbsp;|&nbsp; **Mode:** `[Transaction(TransactionMode.ReadOnly)]` &nbsp;|&nbsp; **Focus:** Coordinate Systems, Affine Mathematics & Family Placement Geometry
 
-A comprehensive learning module for the Revit API's coordinate-system and family-placement geometry: how a `Transform` describes a local coordinate system, how an element's `Location` exposes (or fails to expose) geometric facts natively, and how a `FamilyInstance`'s real-world **Start Point**, **End Point**, **3D Direction**, **Rotation**, and **Length** are — depending on the case — read directly from the API, mathematically derived, driven by Family-specific parameters, or simply not available without more information.
+A comprehensive architectural reference and deep-dive learning guide for the Revit API's coordinate systems, spatial transformations, and family-placement geometry: how a `Transform` defines a local 3D Cartesian coordinate system, how an element's `Location` exposes (or fails to expose) native geometric properties, and how a `FamilyInstance`'s real-world **Start Point**, **End Point**, **3D Direction**, **Rotation**, and **Actual Length** are read directly from the API, mathematically derived, driven by Family-specific parameters, or classified as undefined without additional context.
 
 > [!NOTE]
-> **Source Fidelity:** This document is generated from the current contents of `TransformModule/` and reflects the code as it exists today, including its gaps, conventions, and inconsistencies. It is an exact architectural audit and learning guide, not a design spec for what the module *should* be.
+> **Source Fidelity:** This document is generated from an in-depth audit of all 15 commands in `TransformModule/` and reflects the code as it exists in the codebase today, including its design patterns, mathematical proofs, conventions, and identified architectural gaps.
 
 ```mermaid
 flowchart TD
-    subgraph PartA["Part A - Transform Fundamentals - Generic Elements and Synthetic Math"]
-        A1["Transform Structure<br/>Origin, BasisX, BasisY, BasisZ"] --> A2["Location Polymorphism<br/>LocationPoint vs LocationCurve"]
-        A2 --> A3["Point and Vector Math<br/>Subtraction, Normalization, Dot Product"]
-        A3 --> A4["Transform Mechanics<br/>OfPoint vs OfVector Forward Math"]
-        A4 --> A5["Validation and Round-Trip<br/>Inverse Transform and Synthetic Numerical Proof"]
+    subgraph PartA["Part A - Transform Fundamentals (Generic Elements & Synthetic Math)"]
+        A1["01: TransformInspectionCommand<br/>Origin, BasisX, BasisY, BasisZ"] --> A2["02: LocationPointVsLocationCurveCommand<br/>LocationPoint vs LocationCurve Polymorphism"]
+        A2 --> A3["03: LocationGeometryAnalysisCommand<br/>Data Lineage: Revit Native vs Calculated"]
+        A3 --> A4["04: DerivedGeometryCommand<br/>Direction Normalization, Atan2 Angle, End Reconstruction"]
+        A4 --> A6["06: TransformOfPointCommand<br/>Forward Point Mapping: P_world = O + xBx + yBy + zBz"]
+        A6 --> A7["07: TransformOfVectorCommand<br/>Forward Vector Mapping: V_world = xBx + yBy + zBz (No Origin)"]
+        A7 --> A8["08: PointVsVectorTransformationCommand<br/>Identity Proof: OfPoint(B) - OfPoint(A) == OfVector(B - A)"]
+        A8 --> A9["09: InverseTransformCommand<br/>Transform.Inverse Round-Trip (Model to Local)"]
+        A9 --> A10["10: TransformNumericalExampleCommand<br/>100% Synthetic Integer Matrix Proof"]
     end
 
-    subgraph Bridge["The Bridge - Parameter-Driven Geometry"]
-        BR["Command 05: LocationPoint3DAnalysisCommand<br/>Derives 3D Start/End/Direction from LocationPoint + Custom Parameters"]
+    subgraph Bridge["The Bridge - Parameter-Driven 3D Geometry"]
+        BR["05: LocationPoint3DAnalysisCommand<br/>Sloped 3D Run: Length, Infeed, Outfeed to 3D End & Direction"]
     end
 
-    subgraph PartB["Part B - Family Geometry - Real-World Placement Architecture"]
-        B1["Placement Classification<br/>FamilyPlacementType vs Runtime Location"] --> B2["LocationCurve Instances<br/>Path Length vs Chord, Derived Direction"]
-        B1 --> B3["Face-Based Instances<br/>Transform.BasisZ vs Host Face Normal"]
-        B1 --> B4["Two-Level Instances<br/>Vertical Level Span vs Physical Axis"]
-        B1 --> B5["Transform Fallback<br/>Tri-Axial Dot-Product Direction Alignment"]
+    subgraph PartB["Part B - Family Geometry (Real-World Placement Architecture)"]
+        B1["Part B 01: FamilyPlacementClassificationCommand<br/>PlacementType vs Runtime Location vs Host vs Transform"]
+        B1 --> B3["Part B 03: LocationCurveFamilyGeometryCommand<br/>Native Path Length vs Chord Distance, Derived 3D Direction"]
+        B1 --> B4["Part B 04: FaceBasedFamilyGeometryCommand<br/>Transform.BasisZ vs Host Face Normal Dot Product"]
+        B1 --> B5["Part B 05: TwoLevelFamilyGeometryCommand<br/>Base/Top Elevation Span vs Physical Member Axis"]
+        B1 --> B6["Part B 06: TransformBasedFamilyGeometryCommand<br/>Tri-Axial Dot Product Scanning & Axis Alignment"]
     end
 
     PartA --> Bridge
     Bridge --> PartB
 
-    style PartA fill:#eef4fb,stroke:#3b82f6,stroke-width:2px
+    style PartA fill:#eff6ff,stroke:#3b82f6,stroke-width:2px
     style Bridge fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
     style PartB fill:#ecfdf5,stroke:#10b981,stroke-width:2px
 ```
@@ -39,42 +44,35 @@ flowchart TD
 
 ## 1. Why This Module Exists
 
-Almost every non-trivial Revit API task — placing a family along a slope, orienting a fitting to a host face, reporting a structural member's true 3D length — eventually needs the same **five fundamental geometric facts** about an element:
+Almost every non-trivial Revit API automation — routing conduit, positioning sloped conveyors, orienting face-hosted equipment, reporting structural member lengths, or placing structural connections — requires the same **five fundamental geometric facts** about an element:
 
 ```mermaid
-mindmap
-  root((5 Core Facts))
-    Length
-      Native Curve.Length
-      Parameter-driven arithmetic
-      Undefined for Points/Faces
-    Start Point
-      LocationPoint.Point
-      "Curve.GetEndPoint(0)"
-      Parameter Infeed convention
-    End Point
-      "Curve.GetEndPoint(1)"
-      "Reconstructed: Start + Dir * Len"
-    3D Direction
-      "Derived: End - Start, Normalize"
-      Transform Basis Axis Alignment
-    Rotation
-      LocationPoint.Rotation scalar
-      Derived horizontal Atan2
-      Undefined for 3D/Curves
+flowchart TD
+    ROOT["5 Core Geometric Facts"] --> F1["1. Length<br/>• Native: LocationCurve.Curve.Length<br/>• Parameter: Hypotenuse from custom params<br/>• Undefined for Points/Faces"]
+    ROOT --> F2["2. Start Point<br/>• Native: LocationPoint.Point<br/>• Native: LocationCurve.Curve.GetEndPoint(0)<br/>• Convention: Infeed point at origin"]
+    ROOT --> F3["3. End Point<br/>• Native: LocationCurve.Curve.GetEndPoint(1)<br/>• Derived: Start + Direction * Length<br/>• Parameter: Outfeed point"]
+    ROOT --> F4["4. 3D Direction<br/>• Derived: Normalize(End - Start)<br/>• Derived: Transform Basis Alignment<br/>• Derived: Sloped 3D parameter vector"]
+    ROOT --> F5["5. Rotation<br/>• Native: LocationPoint.Rotation (rad)<br/>• Derived: 2D Horizontal atan2(Dy, Dx)<br/>• Undefined for 3D curves & complex faces"]
+
+    style ROOT fill:#1e293b,stroke:#0f172a,color:#ffffff,stroke-width:2px
+    style F1 fill:#eff6ff,stroke:#3b82f6
+    style F2 fill:#eff6ff,stroke:#3b82f6
+    style F3 fill:#eff6ff,stroke:#3b82f6
+    style F4 fill:#eff6ff,stroke:#3b82f6
+    style F5 fill:#eff6ff,stroke:#3b82f6
 ```
 
-The temptation for Revit API developers is to assume these are always exposed as direct, universal element properties. **They are not.** Revit exposes geometry through several distinct and often uncoordinated mechanisms:
+Developers new to the Revit API often assume these five properties exist as universal, top-level properties on `Element` or `FamilyInstance`. **They do not.** Revit distributes geometry across distinct, decoupled subsystems:
 
 1. `Element.Location` (`LocationPoint` vs. `LocationCurve` polymorphism)
-2. `FamilyInstance.GetTransform()` (Affine Coordinate System: Origin + Basis Vectors)
-3. `FamilyInstance.Host` and `FamilyInstance.HostFace` (Hosting geometry)
-4. `Family.FamilyPlacementType` (Authoring placement architecture)
-5. `FamilyInstance.LookupParameter()` (Family-specific business parameters)
+2. `FamilyInstance.GetTransform()` (Affine local Cartesian coordinate system: `Origin`, `BasisX`, `BasisY`, `BasisZ`)
+3. `FamilyInstance.Host` and `FamilyInstance.HostFace` (Hosting element and geometric face references)
+4. `Family.FamilyPlacementType` (Family authoring template architecture)
+5. `FamilyInstance.LookupParameter()` (Family-specific business and geometric parameters)
 
 ```mermaid
 flowchart LR
-    subgraph Naive["Naive Assumption"]
+    subgraph Naive["Naive Assumption (Does Not Exist in Revit API)"]
         N1["Any Element"] --> N2["element.Length<br/>element.Direction<br/>element.StartPoint<br/>element.EndPoint<br/>element.Rotation"]
     end
 
@@ -83,104 +81,153 @@ flowchart LR
         R2 -->|LocationCurve| RC["Native Start, End, Length<br/>Derived Direction<br/>Rotation = Undefined"]
         R2 -->|LocationPoint| RP["Native Point, Rotation<br/>Length = N/A<br/>Direction = From Transform"]
         R1 --> R3{"Check Host/Face"}
-        R3 -->|HostFace| RF["Measure BasisZ vs Normal<br/>Start/End/Length = Undefined"]
+        R3 -->|HostFace Reference| RF["Compute Normal at UV Midpoint<br/>Measure BasisZ vs Normal<br/>Start/End/Length = Undefined"]
         R1 --> R4{"Check Parameters"}
-        R4 -->|Custom Params| RM["Parameter-Driven Math<br/>e.g., Sloped Infeed/Outfeed"]
+        R4 -->|Custom Params| RM["Parameter-Driven Math<br/>e.g., Sloped Infeed/Outfeed Run"]
     end
 
     style Naive fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px
     style Reality fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px
 ```
 
-The Transform Module builds this engineering judgment in two structured stages:
+### The Module Architecture
 
-- **Part A — Transform Fundamentals:** Teaches the underlying coordinate math and API vocabulary (`Transform`, `XYZ`, points vs. vectors, `Location`) using generic elements, independent of any particular Family.
-- **Part B — Family Geometry:** Applies that vocabulary to real `FamilyInstance` placement architectures (point-based, curve-based, face-based, two-level-based) and repeatedly reinforces the module's central rule:
+The `TransformModule` teaches robust spatial engineering in three progressive sections:
+
+- **Part A — Transform Fundamentals (Commands 01–04, 06–10):** Teaches affine matrix mathematics, vector algebra, coordinate frames, point vs. vector transformations, inverse round-trips, and data lineage on generic model elements and synthetic coordinate systems without touching family-specific parameters.
+- **The Bridge — Parameter-Driven Geometry (Command 05):** Demonstrates how point-based instances with zero native curve geometry can derive full 3D spatial properties (Start, End, Direction, Length) by combining `LocationPoint`, `Transform.BasisX`, and family parameters (`Length`, `Infeed`, `Outfeed`).
+- **Part B — Real-World Family Geometry (Part B Commands 01, 03–06):** Applies fundamental coordinate mathematics to real-world Revit family placement types (`OneLevelBased`, `TwoLevelsBased`, `WorkPlaneBased`, `CurveBased`), enforcing strict runtime inspection over authoring assumptions.
 
 > [!IMPORTANT]
 > **Part B Core Rule:**
-> Do **not** assume geometry from `FamilyPlacementType`, `Transform`, or naming conventions alone. Inspect the actual runtime data, then derive **only what the evidence supports**.
+> Never assume geometric properties based solely on `FamilyPlacementType`, `Transform`, or category naming. Always inspect the actual runtime data (`Location`, `Host`, `HostFace`, `Parameters`), and derive **only what the physical evidence supports**.
 
-Every command in this module is marked `[Transaction(TransactionMode.ReadOnly)]` — this is a pure inspection, mathematics, and reporting module. Nothing here creates, moves, or modifies model elements.
-
----
-
-## 2. Conceptual Progression
-
-```mermaid
-flowchart TD
-    classDef partA fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
-    classDef bridge fill:#fffbeb,stroke:#d97706,stroke-width:2px,color:#92400e;
-    classDef partB fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#166534;
-
-    subgraph Phase1["Stage 1: Core Coordinate Primitives"]
-        A["Transform Structure<br/>Origin, BasisX, BasisY, BasisZ"]:::partA --> B["Location Polymorphism<br/>LocationPoint vs. LocationCurve"]:::partA
-        B --> C["Point / Vector Mathematics<br/>Subtraction, Normalize, DistanceTo"]:::partA
-        C --> D["Direction and Length Derivation<br/>Native API vs. Derived Math"]:::partA
-    end
-
-    subgraph Phase2["Stage 2: Affine Mechanics and Numerical Proofs"]
-        D --> E["Forward Transformation<br/>OfPoint (with Origin) vs. OfVector (without Origin)"]:::partA
-        E --> F["Vector Subtraction Invariance<br/>OfPoint(B) - OfPoint(A) = OfVector(B - A)"]:::partA
-        F --> G["Round-Trip Inversion<br/>Transform.Inverse (Model to Local)"]:::partA
-        G --> H["Synthetic Numerical Proof<br/>Pure Math verification without Revit elements"]:::partA
-    end
-
-    subgraph Phase3["Stage 3: Parameter-Driven Derivation"]
-        H --> I["Command 05: LocationPoint 3D Analysis<br/>Custom parameters (Length, Infeed, Outfeed) to Sloped Run"]:::bridge
-    end
-
-    subgraph Phase4["Stage 4: Real-World Family Placement Architecture"]
-        I --> J["FamilyPlacementType Classification<br/>Architecture classification vs. Geometry guarantee"]:::partB
-        J --> K1["LocationCurve Geometry<br/>Path Length vs. Chord, Derived 3D Direction"]:::partB
-        J --> K2["Face-Based Geometry<br/>Measure BasisZ vs. Host Face Normal"]:::partB
-        J --> K3["Two-Level Geometry<br/>Base/Top Elevations vs. Runtime Location Type"]:::partB
-        J --> K4["Transform Fallback<br/>Tri-Axial Dot-Product Alignment Check"]:::partB
-    end
-```
-
-**Key Educational Divide:**
-- **Part A** never touches a Family parameter and rarely relies on `FamilyPlacementType`.
-- **Part B** never introduces new math — it re-applies Part A's math (`Normalize`, `DotProduct`, vector subtraction, `Transform` inspection) to the specific, messier reality of real-world family placement.
+All commands in this module are decorated with `[Transaction(TransactionMode.ReadOnly)]` — they are pure inspection, mathematics, and diagnostic reporting tools that never modify the Revit document.
 
 ---
 
-## 3. Command Inventory
+## 2. Mathematical Concepts and Formulations
 
-### PART A — Transform Fundamentals
-*(Folder: `Commands/Fundamentals/`, unless noted)*
+The table below outlines all mathematical concepts applied throughout the module, followed by their rigorous mathematical descriptions.
 
-| # | Class (File) | Namespace | Type | Key Mathematical & API Concept |
-|:---:|---|---|:---:|---|
-| **01** | `TransformInspectionCommand` | `...Fundamentals` | Inspection | `Transform` structure: `Origin`, `BasisX`, `BasisY`, `BasisZ` |
-| **02** | `LocationPointVsLocationCurveCommand` | `...Fundamentals` | Polymorphism | `Location` split: `LocationPoint` vs. `LocationCurve` |
-| **03** | `LocationGeometryAnalysisCommand`¹ | `...Fundamentals` | Classification | Explicitly labels value sources: `Revit` (native) vs. `Calculated` (derived) |
-| **04** | `DerivedGeometryCommand` | `...Fundamentals` | Derivation | Direction vector derivation, horizontal angle ($\operatorname{atan2}$), End-Point reconstruction |
-| **05** | `LocationPoint3DAnalysisCommand`² | `...FamilyGeometry` | Parameter-Driven | Derives sloped 3D Start/End/Direction from `Length`, `Infeed`, `Outfeed` parameters |
-| **06** | `TransformOfPointCommand` | `...Fundamentals` | Transformation | Formalizes $\mathbf{P}_{\text{world}} = \mathbf{O} + X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ |
-| **07** | `TransformOfVectorCommand` | `...Fundamentals` | Transformation | Formalizes $\vec{V}_{\text{world}} = X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ (**without** Origin) |
-| **08** | `PointVsVectorTransformationCommand` | `...Fundamentals` | Proof | Proves identity: $\mathbf{T}.\text{OfPoint}(B) - \mathbf{T}.\text{OfPoint}(A) \equiv \mathbf{T}.\text{OfVector}(B - A)$ |
-| **09** | `InverseTransformCommand` | `...Fundamentals` | Inversion | `Transform.Inverse` round-trip ($\text{Local} \leftrightarrow \text{Model}$) for points and vectors |
-| **10** | `TransformNumericalExampleCommand` | `...Fundamentals` | Synthetic Math | Fully synthetic forward/inverse transform proof — no Revit element required |
-
-> [!NOTE]
-> **Inventory Footnotes:**
-> 1. **Filename Mismatch:** File is named `PointAndVectorMathematicsCommand.cs`, but class inside is `LocationGeometryAnalysisCommand`.
-> 2. **Physical Location:** Command 05 is physically stored in `Commands/FamilyGeometry/`, but its header numbers it "Command 05" in the Part A global sequence. Conceptually, it is the bridge between Part A and Part B.
+| Mathematical Concept | Formal Equation / Definition | Used In Commands |
+|---|---|---|
+| **Vector Subtraction** | $\vec{V} = \mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}} = \begin{bmatrix} X_e - X_s \\ Y_e - Y_s \\ Z_e - Z_s \end{bmatrix}$ | Cmd 02, 03, 04, 08, Part B 03, 05, 06 |
+| **Vector Magnitude / Norm** | $\|\vec{V}\| = \sqrt{V_x^2 + V_y^2 + V_z^2}$ | Cmd 02, 03, 04, 05, 07, 08, Part B 03, 05, 06 |
+| **Vector Normalization** | $\hat{\mathbf{u}} = \dfrac{\vec{V}}{\|\vec{V}\|} \quad (\|\vec{V}\| > 10^{-9})$ | Cmd 02, 03, 04, 05, 06, 07, 08, 09, Part B 03–06 |
+| **Dot Product** | $\vec{A} \cdot \vec{B} = A_x B_x + A_y B_y + A_z B_z = \|\vec{A}\|\|\vec{B}\|\cos\theta$ | Cmd 10, Part B 04, Part B 06 |
+| **Clamped Angular Separation** | $\theta = \arccos\left(\text{clamp}\left(\dfrac{\vec{A} \cdot \vec{B}}{\|\vec{A}\|\|\vec{B}\|}, -1.0, 1.0\right)\right) \times \dfrac{180^\circ}{\pi}$ | Part B 04, Part B 06 |
+| **Affine Point Transformation** | $\mathbf{P}_{\text{world}} = \mathbf{O} + X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ | Cmd 06, 08, 09, 10 |
+| **Affine Vector Transformation** | $\vec{V}_{\text{world}} = X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z \quad (\text{Origin excluded})$ | Cmd 07, 08, 09, 10 |
+| **Affine Vector Invariance Proof** | $\mathbf{T}.\text{OfPoint}(\mathbf{P}_B) - \mathbf{T}.\text{OfPoint}(\mathbf{P}_A) \equiv \mathbf{T}.\text{OfVector}(\mathbf{P}_B - \mathbf{P}_A)$ | Cmd 08 |
+| **Inverse Coordinate Mapping** | $\mathbf{P}_{\text{local}} = \mathbf{T}^{-1}.\text{OfPoint}(\mathbf{P}_{\text{world}}), \quad \mathbf{T}^{-1} \mathbf{T} = \mathbf{I}$ | Cmd 09, 10 |
+| **Pythagorean Spatial Decomposition** | $H = \sqrt{L^2 - \Delta Z^2}, \quad \vec{D}_{3D} = \left(\dfrac{H}{L}\right)\hat{\mathbf{u}}_{xy} + \left(\dfrac{\Delta Z}{L}\right)\hat{\mathbf{k}}$ | Cmd 05 (Bridge) |
+| **2D Yaw / Horizontal Angle** | $\theta_{xy} = \text{atan2}(D_y, D_x) \times \dfrac{180^\circ}{\pi}$ | Cmd 04, Cmd 05 |
+| **End Point Reconstruction** | $\mathbf{P}_{\text{reconstructed}} = \mathbf{P}_{\text{start}} + \vec{D} \times L$ | Cmd 03, 04, 05 |
+| **Chord vs. Path Length** | $L_{\text{chord}} = \|\mathbf{P}_1 - \mathbf{P}_0\| \le L_{\text{curve}}$ | Part B 03 |
+| **Tri-Axial Maximum Alignment** | $\text{Aligned Axis} = \arg\max_{i \in \{X,Y,Z\}} |\vec{D}_{\text{curve}} \cdot \mathbf{B}_i|$ | Part B 06 |
 
 ---
 
-### PART B — Family Geometry
-*(Folder: `Commands/FamilyGeometry/`)*
+### 2.1 4x4 Homogeneous Affine Matrix Structure
 
-| Part B # | Class | Placement Focus | Key Architecture & Verification Rule |
-|:---:|---|---|---|
-| **01** | `FamilyPlacementClassificationCommand` | Overview / Router | Classifies `FamilyPlacementType`, actual `Location`, `Host`/`HostFace`, and `Transform` |
-| **02** | *(Gap — See [§11 Remaining Commands](#11-remaining-commands))* | `LocationPoint` Family | Generic `LocationPoint` family geometry counterpart to Command 03 |
-| **03** | `LocationCurveFamilyGeometryCommand` | `CurveBased` | Native Start/End/Length, derived Direction, straight-line chord vs. curve length |
-| **04** | `FaceBasedFamilyGeometryCommand` | `WorkPlaneBased` / Face | Measures $\mathbf{B}_z \cdot \hat{\mathbf{n}}_{\text{face}}$ angle; marks Start/End/Length as undefined |
-| **05** | `TwoLevelFamilyGeometryCommand` | `TwoLevelsBased` | Separates Base/Top level elevation span from runtime `Location` (Point vs Curve) |
-| **06** | `TransformBasedFamilyGeometryCommand` | Universal Fallback | Scans $\vec{D}_{\text{curve}} \cdot \mathbf{B}_i$ ($i \in \{X,Y,Z\}$) to find true physical alignment axis |
+In 3D Euclidean space, a Revit `Transform` is mathematically an affine transformation matrix represented in homogeneous coordinates:
+
+$$\mathbf{T} = \begin{bmatrix}
+\mathbf{B}_{x,x} & \mathbf{B}_{y,x} & \mathbf{B}_{z,x} & \mathbf{O}_x \\
+\mathbf{B}_{x,y} & \mathbf{B}_{y,y} & \mathbf{B}_{z,y} & \mathbf{O}_y \\
+\mathbf{B}_{x,z} & \mathbf{B}_{y,z} & \mathbf{B}_{z,z} & \mathbf{O}_z \\
+0 & 0 & 0 & 1
+\end{bmatrix}$$
+
+Where:
+- $\mathbf{O} = (\mathbf{O}_x, \mathbf{O}_y, \mathbf{O}_z)^T$ is `Transform.Origin` (the translation vector locating the local origin in world coordinates).
+- $\mathbf{B}_x = (\mathbf{B}_{x,x}, \mathbf{B}_{x,y}, \mathbf{B}_{x,z})^T$ is `Transform.BasisX` (the local $X$-axis unit vector).
+- $\mathbf{B}_y = (\mathbf{B}_{y,x}, \mathbf{B}_{y,y}, \mathbf{B}_{y,z})^T$ is `Transform.BasisY` (the local $Y$-axis unit vector).
+- $\mathbf{B}_z = (\mathbf{B}_{z,x}, \mathbf{B}_{z,y}, \mathbf{B}_{z,z})^T$ is `Transform.BasisZ` (the local $Z$-axis unit vector).
+
+For an orthogonal, non-scaled transform (standard in Revit family placement):
+$$\mathbf{B}_x \cdot \mathbf{B}_y = \mathbf{B}_y \cdot \mathbf{B}_z = \mathbf{B}_z \cdot \mathbf{B}_x = 0$$
+$$\|\mathbf{B}_x\| = \|\mathbf{B}_y\| = \|\mathbf{B}_z\| = 1.0$$
+$$\mathbf{B}_z = \mathbf{B}_x \times \mathbf{B}_y \quad (\text{Right-handed coordinate system})$$
+
+---
+
+### 2.2 Point vs. Vector Homogeneous Transformation
+
+In homogeneous coordinates, a 3D **Point** has a fourth coordinate $w = 1$, while a 3D **Vector** has $w = 0$:
+
+$$\mathbf{P}_{\text{local}} = \begin{bmatrix} X \\ Y \\ Z \\ 1 \end{bmatrix}, \quad \vec{V}_{\text{local}} = \begin{bmatrix} X \\ Y \\ Z \\ 0 \end{bmatrix}$$
+
+Multiplying by matrix $\mathbf{T}$:
+
+$$\mathbf{T} \mathbf{P}_{\text{local}} = \begin{bmatrix}
+\mathbf{B}_x & \mathbf{B}_y & \mathbf{B}_z & \mathbf{O} \\
+0 & 0 & 0 & 1
+\end{bmatrix} \begin{bmatrix} X \\ Y \\ Z \\ 1 \end{bmatrix} = \begin{bmatrix} \mathbf{O} + X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z \\ 1 \end{bmatrix} = \mathbf{P}_{\text{world}}$$
+
+$$\mathbf{T} \vec{V}_{\text{local}} = \begin{bmatrix}
+\mathbf{B}_x & \mathbf{B}_y & \mathbf{B}_z & \mathbf{O} \\
+0 & 0 & 0 & 1
+\end{bmatrix} \begin{bmatrix} X \\ Y \\ Z \\ 0 \end{bmatrix} = \begin{bmatrix} X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z \\ 0 \end{bmatrix} = \vec{V}_{\text{world}}$$
+
+> [!CAUTION]
+> **The Origin Anti-Pattern:**
+> Adding `Origin` to a transformed vector ($\mathbf{O} + \vec{V}_{\text{world}}$) converts a directional quantity into a spatial position point, destroying vector algebra rules. Vectors describe displacement and direction; they have no location in space.
+
+---
+
+### 2.3 The Vector Subtraction Invariance Proof
+
+Command 08 validates why the difference between two transformed points is identical to transforming the vector between them:
+
+$$\mathbf{T}.\text{OfPoint}(\mathbf{P}_B) - \mathbf{T}.\text{OfPoint}(\mathbf{P}_A) = \left( \mathbf{O} + X_B\mathbf{B}_x + Y_B\mathbf{B}_y + Z_B\mathbf{B}_z \right) - \left( \mathbf{O} + X_A\mathbf{B}_x + Y_A\mathbf{B}_y + Z_A\mathbf{B}_z \right)$$
+$$= (X_B - X_A)\mathbf{B}_x + (Y_B - Y_A)\mathbf{B}_y + (Z_B - Z_A)\mathbf{B}_z$$
+$$= \mathbf{T}.\text{OfVector}(\mathbf{P}_B - \mathbf{P}_A)$$
+
+Because $\mathbf{O} - \mathbf{O} = \mathbf{0}$, the translation origin cancels completely.
+
+---
+
+### 2.4 Inverse Transformation Matrix ($\mathbf{T}^{-1}$)
+
+Because the upper-left $3 \times 3$ submatrix $\mathbf{R} = [\mathbf{B}_x \; \mathbf{B}_y \; \mathbf{B}_z]$ is orthogonal ($\mathbf{R}^{-1} = \mathbf{R}^T$), the inverse matrix $\mathbf{T}^{-1}$ is:
+
+$$\mathbf{T}^{-1} = \begin{bmatrix}
+\mathbf{B}_{x,x} & \mathbf{B}_{x,y} & \mathbf{B}_{x,z} & -\mathbf{B}_x \cdot \mathbf{O} \\
+\mathbf{B}_{y,x} & \mathbf{B}_{y,y} & \mathbf{B}_{y,z} & -\mathbf{B}_y \cdot \mathbf{O} \\
+\mathbf{B}_{z,x} & \mathbf{B}_{z,y} & \mathbf{B}_{z,z} & -\mathbf{B}_z \cdot \mathbf{O} \\
+0 & 0 & 0 & 1
+\end{bmatrix}$$
+
+To transform a world point $\mathbf{P}_{\text{world}}$ back into local coordinates $\mathbf{P}_{\text{local}}$:
+$$\mathbf{P}_{\text{local}} = \begin{bmatrix}
+(\mathbf{P}_{\text{world}} - \mathbf{O}) \cdot \mathbf{B}_x \\
+(\mathbf{P}_{\text{world}} - \mathbf{O}) \cdot \mathbf{B}_y \\
+(\mathbf{P}_{\text{world}} - \mathbf{O}) \cdot \mathbf{B}_z
+\end{bmatrix}$$
+
+To transform a world vector $\vec{V}_{\text{world}}$ back into local coordinates $\vec{V}_{\text{local}}$:
+$$\vec{V}_{\text{local}} = \begin{bmatrix}
+\vec{V}_{\text{world}} \cdot \mathbf{B}_x \\
+\vec{V}_{\text{world}} \cdot \mathbf{B}_y \\
+\vec{V}_{\text{world}} \cdot \mathbf{B}_z
+\end{bmatrix}$$
+
+---
+
+### 2.5 Clamping and Floating-Point Guarding
+
+When computing angles from dot products, numerical inaccuracies can cause $|\vec{A} \cdot \vec{B}| > 1.0$ (e.g., $1.0000000002$). Without clamping, `Math.Acos(dot)` returns `double.NaN`:
+
+$$\text{clamp}(v, \min, \max) = \max(\min, \min(\max, v))$$
+$$\theta = \arccos\big(\text{clamp}(\hat{\mathbf{u}} \cdot \hat{\mathbf{v}}, -1.0, 1.0)\big) \times \frac{180^\circ}{\pi}$$
+
+---
+
+## 3. Comprehensive Command Inventory
+
+The module contains 15 C# command classes distributed across two directories:
 
 ```mermaid
 flowchart LR
@@ -189,22 +236,22 @@ flowchart LR
         F_DIR["Commands/Fundamentals/"]
         G_DIR["Commands/FamilyGeometry/"]
 
-        F_DIR --> C01["01 TransformInspectionCommand"]
-        F_DIR --> C02["02 LocationPointVsLocationCurveCommand"]
-        F_DIR --> C03["03 LocationGeometryAnalysisCommand"]
-        F_DIR --> C04["04 DerivedGeometryCommand"]
-        F_DIR --> C06["06 TransformOfPointCommand"]
-        F_DIR --> C07["07 TransformOfVectorCommand"]
-        F_DIR --> C08["08 PointVsVectorTransformationCommand"]
-        F_DIR --> C09["09 InverseTransformCommand"]
-        F_DIR --> C10["10 TransformNumericalExampleCommand"]
+        F_DIR --> C01["01: TransformInspectionCommand.cs"]
+        F_DIR --> C02["02: LocationPointVsLocationCurveCommand.cs"]
+        F_DIR --> C03["03: PointAndVectorMathematicsCommand.cs<br/>(LocationGeometryAnalysisCommand)"]
+        F_DIR --> C04["04: DerivedGeometryCommand.cs"]
+        F_DIR --> C06["06: TransformOfPointCommand.cs"]
+        F_DIR --> C07["07: TransformOfVectorCommand.cs"]
+        F_DIR --> C08["08: PointVsVectorTransformationCommand.cs"]
+        F_DIR --> C09["09: InverseTransformCommand.cs"]
+        F_DIR --> C10["10: TransformNumericalExampleCommand.cs"]
 
-        G_DIR --> C05["05 LocationPoint3DAnalysisCommand - Bridge"]
-        G_DIR --> PB01["Part B 01 FamilyPlacementClassificationCommand"]
-        G_DIR --> PB03["Part B 03 LocationCurveFamilyGeometryCommand"]
-        G_DIR --> PB04["Part B 04 FaceBasedFamilyGeometryCommand"]
-        G_DIR --> PB05["Part B 05 TwoLevelFamilyGeometryCommand"]
-        G_DIR --> PB06["Part B 06 TransformBasedFamilyGeometryCommand"]
+        G_DIR --> C05["05: LocationPoint3DAnalysisCommand.cs (The Bridge)"]
+        G_DIR --> PB01["Part B 01: FamilyPlacementClassificationCommand.cs"]
+        G_DIR --> PB03["Part B 03: LocationCurveFamilyGeometryCommand.cs"]
+        G_DIR --> PB04["Part B 04: FaceBasedFamilyGeometryCommand.cs"]
+        G_DIR --> PB05["Part B 05: TwoLevelFamilyGeometryCommand.cs"]
+        G_DIR --> PB06["Part B 06: TransformBasedFamilyGeometryCommand.cs"]
     end
 
     style F_DIR fill:#dbeafe,stroke:#1e40af,stroke-width:2px
@@ -212,515 +259,580 @@ flowchart LR
     style C05 fill:#fef3c7,stroke:#b45309,stroke-width:2px
 ```
 
+### Complete Inventory Table
+
+| # | Command Class | Physical File | Namespace | Category | Primary Focus |
+|:---:|---|---|---|:---:|---|
+| **01** | `TransformInspectionCommand` | `TransformInspectionCommand.cs` | `...Fundamentals` | Inspection | Reads `Transform.Origin`, `BasisX`, `BasisY`, `BasisZ` from a `FamilyInstance` |
+| **02** | `LocationPointVsLocationCurveCommand` | `LocationPointVsLocationCurveCommand.cs` | `...Fundamentals` | Polymorphism | Demonstrates runtime polymorphic branch between `LocationPoint` and `LocationCurve` |
+| **03** | `LocationGeometryAnalysisCommand` | `PointAndVectorMathematicsCommand.cs` | `...Fundamentals` | Lineage | Formally labels value lineage: `[Revit]` native data vs. `[Calculated]` vector arithmetic |
+| **04** | `DerivedGeometryCommand` | `DerivedGeometryCommand.cs` | `...Fundamentals` | Derivation | Normalizes direction, computes 2D $\text{atan2}$ angle, reconstructs End Point with error verification |
+| **05** | `LocationPoint3DAnalysisCommand` | `LocationPoint3DAnalysisCommand.cs` | `...FamilyGeometry` | **Bridge** | Derives full 3D sloped run from `LocationPoint` + `Length`, `Infeed`, `Outfeed` parameters |
+| **06** | `TransformOfPointCommand` | `TransformOfPointCommand.cs` | `...Fundamentals` | Affine Math | Validates $\mathbf{P}_{\text{world}} = \mathbf{O} + X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ against API `OfPoint()` |
+| **07** | `TransformOfVectorCommand` | `TransformOfVectorCommand.cs` | `...Fundamentals` | Affine Math | Validates $\vec{V}_{\text{world}} = X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ (**excluding** Origin) against `OfVector()` |
+| **08** | `PointVsVectorTransformationCommand` | `PointVsVectorTransformationCommand.cs` | `...Fundamentals` | Proof | Mathematically proves $\mathbf{T}.\text{OfPoint}(B) - \mathbf{T}.\text{OfPoint}(A) \equiv \mathbf{T}.\text{OfVector}(B - A)$ |
+| **09** | `InverseTransformCommand` | `InverseTransformCommand.cs` | `...Fundamentals` | Inversion | Verifies round-trip precision $(\text{Local} \to \text{Model} \to \text{Local})$ using `Transform.Inverse` |
+| **10** | `TransformNumericalExampleCommand` | `TransformNumericalExampleCommand.cs` | `...Fundamentals` | Synthetic | Pure mathematical verification with integer coordinates — no Revit document or elements needed |
+| **B-01**| `FamilyPlacementClassificationCommand` | `FamilyPlacementClassificationCommand.cs` | `...FamilyGeometry` | Router | Classifies `FamilyPlacementType`, actual `Location`, `Host`, `HostFace`, and recommends strategy |
+| **B-03**| `LocationCurveFamilyGeometryCommand` | `LocationCurveFamilyGeometryCommand.cs` | `...FamilyGeometry` | Curve-Based | Validates `Curve.Length` vs. straight chord distance; confirms rotation is undefined for curves |
+| **B-04**| `FaceBasedFamilyGeometryCommand` | `FaceBasedFamilyGeometryCommand.cs` | `...FamilyGeometry` | Face-Based | Measures angle between $\mathbf{B}_z$ and face normal $\hat{\mathbf{n}}$ at UV midpoint; Start/End/Length undefined |
+| **B-05**| `TwoLevelFamilyGeometryCommand` | `TwoLevelFamilyGeometryCommand.cs` | `...FamilyGeometry` | Two-Level | Inspects Base/Top level elevation span; warns that level vector $\ne$ slanted member axis |
+| **B-06**| `TransformBasedFamilyGeometryCommand` | `TransformBasedFamilyGeometryCommand.cs` | `...FamilyGeometry` | Fallback | Scans tri-axial dot products $\vec{D}_{\text{curve}} \cdot \mathbf{B}_i$ to identify true physical member axis |
+
 ---
 
-## 4. Detailed Command Reference
+## 4. Part A — Transform Fundamentals (Deep-Dive Command Reference)
 
 ---
 
 ### Command 01 — `TransformInspectionCommand`
+*(File: `Commands/Fundamentals/TransformInspectionCommand.cs`)*
 
 ```mermaid
 flowchart LR
-    FI["FamilyInstance"] -->|GetTransform| T["Transform"]
-    T --> O["Origin - XYZ"]
-    T --> BX["BasisX - Unit Vector"]
-    T --> BY["BasisY - Unit Vector"]
-    T --> BZ["BasisZ - Unit Vector"]
+    FI["FamilyInstance Selection"] -->|familyInstance.GetTransform| T["Transform Object"]
+    T --> O["Origin<br/>(X, Y, Z) ft"]
+    T --> BX["BasisX (Local X Axis)<br/>Unit Vector (x, y, z)"]
+    T --> BY["BasisY (Local Y Axis)<br/>Unit Vector (x, y, z)"]
+    T --> BZ["BasisZ (Local Z Axis)<br/>Unit Vector (x, y, z)"]
 ```
 
-- **API Surface:** `FamilyInstance.GetTransform()`, `Transform.Origin`, `Transform.BasisX`, `Transform.BasisY`, `Transform.BasisZ`
-- **Core Concept:** A `Transform` defines a local Cartesian coordinate system embedded in the global model space:
-
-$$\mathbf{T} = \left[ \mathbf{Origin} \;\middle|\; \mathbf{BasisX} \;\middle|\; \mathbf{BasisY} \;\middle|\; \mathbf{BasisZ} \right]$$
-
-- **Input:** Single selected `FamilyInstance`.
-- **Output:** `TaskDialog` listing Origin $(X,Y,Z)$ and the three orthogonal unit basis vectors $(\mathbf{B}_x, \mathbf{B}_y, \mathbf{B}_z)$.
-- **Math Complexity:** None — pure API property read.
-- **Relationship:** The foundational entry point of the module; establishes the basis vector terminology used by all subsequent commands.
+- **Execution Flow:**
+  1. Prompts user to select an element via `UIDocument.Selection.PickObject(ObjectType.Element)`.
+  2. Defensively casts selected `Element` to `FamilyInstance` (fails gracefully if element is not a family instance).
+  3. Calls `familyInstance.GetTransform()`.
+  4. Reads the four vector components: `transform.Origin`, `transform.BasisX`, `transform.BasisY`, `transform.BasisZ`.
+  5. Displays all components formatted to 4 decimal places in a `TaskDialog`.
+- **API Surface:**
+  - `FamilyInstance.GetTransform() -> Transform`
+  - `Transform.Origin -> XYZ`
+  - `Transform.BasisX -> XYZ`, `Transform.BasisY -> XYZ`, `Transform.BasisZ -> XYZ`
+- **Key Insight:** `Transform` establishes the local Cartesian coordinate system of an instance relative to the model world space.
 
 ---
 
 ### Command 02 — `LocationPointVsLocationCurveCommand`
+*(File: `Commands/Fundamentals/LocationPointVsLocationCurveCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    LOC["Element.Location"] --> CHECK{Location Subtype?}
-    CHECK -->|LocationPoint| LP["LocationPoint<br/>Point - Native XYZ<br/>Rotation - Native radians"]
-    CHECK -->|LocationCurve| LC["LocationCurve<br/>GetEndPoint(0) to Start<br/>GetEndPoint(1) to End<br/>Curve.Length to Native Length<br/>Normalize(End - Start) to Derived Direction"]
+    E["Element.Location"] --> CHK{"Runtime Type?"}
+    CHK -->|LocationPoint| LP["LocationPoint<br/>• Point: Insertion XYZ<br/>• Rotation: Scalar radians"]
+    CHK -->|LocationCurve| LC["LocationCurve<br/>• GetEndPoint(0): Start Point<br/>• GetEndPoint(1): End Point<br/>• Length: Curve.Length<br/>• Direction: (End - Start).Normalize()"]
+    CHK -->|Other / Null| UNK["Unhandled Location Type"]
 ```
 
-- **API Surface:** `Element.Location`, `LocationPoint.Point`, `LocationPoint.Rotation`, `LocationCurve.Curve`, `Curve.GetEndPoint(0/1)`, `Curve.Length`
-- **Core Concept:** Runtime `Location` is polymorphic. A point-based element exposes an insertion point and a rotation scalar; a curve-based element exposes endpoints, length, and a continuous path.
+- **Execution Flow:**
+  1. Selects an element and accesses `element.Location`.
+  2. Performs polymorphic type checks (`as LocationPoint` vs `as LocationCurve`).
+  3. **LocationPoint Branch:** Extracts `Point` and `Rotation` (converted from radians to degrees via $\text{deg} = \text{rad} \times \frac{180}{\pi}$).
+  4. **LocationCurve Branch:** Extracts `Curve`, `GetEndPoint(0)`, `GetEndPoint(1)`, `Curve.Length`, and calculates derived direction $\vec{D} = \text{Normalize}(\mathbf{P}_1 - \mathbf{P}_0)$.
+  5. Handles other or null location types safely.
 - **Mathematical Formula:**
-
-$$\vec{D} = \frac{\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}}{\|\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}\|} = \operatorname{Normalize}(\mathbf{P}_1 - \mathbf{P}_0)$$
-
-- **Input:** Any selected `Element` (not restricted to `FamilyInstance`).
-- **Output:** `TaskDialog` detailing the active `Location` branch with endpoints, length, and derived direction.
-- **Relationship:** Generalizes coordinate inspection to arbitrary model elements; establishes the Native vs. Derived split.
+  $$\vec{D} = \frac{\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}}{\|\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}\|}$$
 
 ---
 
 ### Command 03 — `LocationGeometryAnalysisCommand`
-*(Physical file: `PointAndVectorMathematicsCommand.cs`)*
+*(File: `Commands/Fundamentals/PointAndVectorMathematicsCommand.cs`)*
 
 ```mermaid
 flowchart LR
-    subgraph Native["Revit Native Source"]
+    subgraph Native["[Revit Native] Data Lineage"]
         N1["LocationPoint.Point"]
         N2["LocationPoint.Rotation"]
-        N3["GetEndPoint(0/1)"]
-        N4["Curve.Length"]
+        N3["Curve.GetEndPoint(0) - Start"]
+        N4["Curve.GetEndPoint(1) - End"]
+        N5["Curve.Length - Path Length"]
     end
-    subgraph Calculated["Calculated / Derived Source"]
-        C1["3D Direction = Normalize(End - Start)"]
-        C2["Reconstructed End = Start + Dir * Length"]
+
+    subgraph Derived["[Calculated] Vector Math"]
+        D1["3D Direction = Normalize(End - Start)"]
+        D2["Vector Length = Direction.GetLength() == 1.0"]
     end
+
+    Native --> Derived
 ```
 
-- **API Surface:** Same as Command 02 (`Element.Location`, `LocationPoint`, `LocationCurve`).
-- **Core Concept:** Formalizes explicit data lineage by tagging every reported geometric value with its **Source**:
-  - `[Revit]` → Values directly stored in the element's database record.
-  - `[Calculated]` → Values computed via vector arithmetic.
-- **Input:** Any selected `Element`.
-- **Output:** `TaskDialog` containing a `SUMMARY:` classification matrix by source.
-- **Relationship:** Establishes the rigor of never presenting derived numbers as native API facts.
+- **Core Concept — Explicit Data Lineage:**
+  Commands must never mislead consumers by presenting computed numbers as native Revit API facts. This command tags every geometric output with its exact provenance:
+  - `[Revit]` → Values stored directly in Revit's internal database record.
+  - `[Calculated]` → Values derived through post-retrieval vector arithmetic.
+- **Data Lineage Summary Matrix:**
+
+| Geometric Property | `LocationPoint` Source | `LocationCurve` Source |
+|---|---|---|
+| **Start Point** | `N/A` | `[Revit]` (`Curve.GetEndPoint(0)`) |
+| **End Point** | `N/A` | `[Revit]` (`Curve.GetEndPoint(1)`) |
+| **Point** | `[Revit]` (`LocationPoint.Point`) | `N/A` |
+| **Rotation** | `[Revit]` (`LocationPoint.Rotation`) | `Not directly available` |
+| **3D Direction** | `Not directly represented` | `[Calculated]` (`(End - Start).Normalize()`) |
+| **Actual Length** | `N/A` | `[Revit]` (`Curve.Length`) |
 
 ---
 
 ### Command 04 — `DerivedGeometryCommand`
+*(File: `Commands/Fundamentals/DerivedGeometryCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    START["Start Point (P0)"] --> RECON["Reconstruct End Point<br/>End_calc = P0 + Direction * Length"]
+    P0["Start Point (P0)"] --> RECON["Reconstruct End Point<br/>P_calc = P0 + Direction * Length"]
     DIR["Derived Direction (D)"] --> RECON
     LEN["Native Length (L)"] --> RECON
-    RECON --> ERR["Error Verification<br/>Error = DistanceTo(End_native, End_calc)"]
-    END_NAT["Native End Point (P1)"] --> ERR
+    RECON --> ERR["Error Verification<br/>Error = DistanceTo(P_native, P_calc)"]
+    P1["Native End Point (P1)"] --> ERR
+
+    DIR --> YAW["Horizontal Yaw Angle<br/>atan2(Direction.Y, Direction.X) * 180 / pi"]
 ```
 
-- **API Surface:** `LocationPoint`, `LocationCurve`, `FamilyInstance.GetTransform()`, `Curve.GetEndPoint`, `Curve.Length`
-- **Core Concept:** Derivation and reconstruction formulas:
-
-$$\mathbf{P}_{\text{reconstructed}} = \mathbf{P}_{\text{start}} + \vec{D} \times L$$
-
-$$\theta_{\text{horizontal}} = \operatorname{atan2}(D_y, D_x) \times \frac{180^\circ}{\pi}$$
-
-$$\text{Reconstruction Error} = \|\mathbf{P}_{\text{native\_end}} - \mathbf{P}_{\text{reconstructed}}\| \approx 0$$
-
-- **Input:** Any `Element`. (If `LocationPoint`, casts to `FamilyInstance` to read `Transform.BasisX` as a horizontal direction stand-in).
-- **Output:** Derived 3D direction, 2D horizontal angle, reconstructed End Point, and verification error.
-- **Relationship:** Introduces the calculate-and-verify round-trip pattern reused in Commands 06–10.
-
----
-
-### Command 05 — `LocationPoint3DAnalysisCommand`
-*(Physical location: `Commands/FamilyGeometry/`)*
-
-```mermaid
-flowchart TD
-    subgraph Inputs["1. Runtime Inputs"]
-        LP["LocationPoint.Point - Infeed Start"]
-        T["Transform.BasisX - Horizontal Heading"]
-        P1["Param 'Length' - 3D Hypotenuse L"]
-        P2["Param 'Infeed' - Elevation Zin"]
-        P3["Param 'Outfeed' - Elevation Zout"]
-    end
-
-    subgraph Derivation["2. Trigonometric 3D Derivation"]
-        DZ["Delta Z = Zout - Zin"]
-        H["H = sqrt(L^2 - Delta Z^2) - Horizontal Run"]
-        DIR3D["Dir_3D = (H * BasisX_xy + Delta Z * k) / L"]
-        END["P_end = P_start + Dir_3D * L"]
-    end
-
-    subgraph Validation["3. Error Check"]
-        CHK["Check: abs(P_end.Z - Zout) is about 0"]
-    end
-
-    Inputs --> Derivation --> Validation
-```
-
-- **API Surface:** `LocationPoint.Point/Rotation`, `FamilyInstance.LookupParameter()`, `Parameter.AsDouble()`, `Transform.BasisX`
-- **Core Concept:** First worked example of **Family-specific parameter geometry**. A sloped run (e.g. conveyor/chute) with only a `LocationPoint` derives full 3D geometry using custom parameter arithmetic:
-
-$$\Delta Z = Z_{\text{outfeed}} - Z_{\text{infeed}}$$
-
-$$H = \sqrt{L^2 - \Delta Z^2} \quad (\text{Horizontal Run via Pythagorean Theorem})$$
-
-$$\vec{D}_{3D} = \frac{H \cdot \operatorname{Normalize}(\mathbf{B}_{x,xy}) + \Delta Z \cdot \hat{\mathbf{k}}}{L}$$
-
-$$\mathbf{P}_{\text{end}} = \mathbf{P}_{\text{start}} + \vec{D}_{3D} \times L$$
-
-- **Input:** `FamilyInstance` containing parameters literally named `Length`, `Infeed`, `Outfeed`.
-- **Output:** Parameter values, derived Start/End points, true 3D direction vector, and elevation error check.
-- **Crucial Caveat:** `LocationPoint.Point = Infeed` and `BasisX = Heading` are **Family authoring conventions**, not universal Revit rules!
+- **Mathematical Derivations:**
+  1. **Direction Normalization:**
+     $$\vec{V} = \mathbf{P}_1 - \mathbf{P}_0, \quad \hat{\mathbf{u}} = \frac{\vec{V}}{\|\vec{V}\|}$$
+  2. **Horizontal Heading / Yaw ($\theta_{xy}$):**
+     $$\theta_{xy} = \text{atan2}(\hat{u}_y, \hat{u}_x) \times \frac{180^\circ}{\pi}$$
+  3. **End Point Reconstruction & Error Residual:**
+     $$\mathbf{P}_{\text{reconstructed}} = \mathbf{P}_0 + \hat{\mathbf{u}} \times L$$
+     $$\text{Residual Error} = \|\mathbf{P}_1 - \mathbf{P}_{\text{reconstructed}}\| \approx 0.00000000 \text{ ft}$$
+- **LocationPoint Fallback:** If the selected element is a point-based `FamilyInstance`, the command derives direction from `Transform.BasisX.Normalize()` as the local heading.
 
 ---
 
 ### Command 06 — `TransformOfPointCommand`
+*(File: `Commands/Fundamentals/TransformOfPointCommand.cs`)*
 
 ```mermaid
 flowchart LR
-    P_LOC["Local Point - X, Y, Z"] --> OP["Transform.OfPoint()"]
-    OP --> P_WLD["World Point<br/>Origin + X*BasisX + Y*BasisY + Z*BasisZ"]
+    LP["Local Test Point<br/>(2, 3, 4)"] --> TOP["Transform.OfPoint()"]
+    TOP --> WP["World Point (P_world)"]
+
+    T["Transform Structure"] --> MAN["Manual Calculation:<br/>Origin + 2*BasisX + 3*BasisY + 4*BasisZ"]
+    MAN --> CMP["Compare: DistanceTo(WP, P_manual) < 1e-8"]
+    WP --> CMP
 ```
 
-- **API Surface:** `Transform.OfPoint()`, `Transform.Origin/BasisX/BasisY/BasisZ`, `LocationPoint.Point`
-- **Core Concept:** Formalizes the mathematical definition of transforming a local position point into global model space:
-
-$$\mathbf{P}_{\text{world}} = \mathbf{T}.\text{OfPoint}(\mathbf{P}_{\text{local}}) = \mathbf{Origin} + X \cdot \mathbf{BasisX} + Y \cdot \mathbf{BasisY} + Z \cdot \mathbf{BasisZ}$$
-
-- **Verification Math:**
-
-$$\mathbf{P}_{\text{manual}} = \mathbf{O} + P_x \mathbf{B}_x + P_y \mathbf{B}_y + P_z \mathbf{B}_z$$
-
-$$\text{Error} = \|\mathbf{P}_{\text{world}} - \mathbf{P}_{\text{manual}}\| = 0.000000$$
-
-- **Input:** Selected `FamilyInstance` (evaluates a hardcoded test local point $(2.0, 3.0, 0.0)$).
-- **Output:** Forward transformed point, hand-calculated verification, error distance, and comparison to actual `LocationPoint`.
+- **Mathematical Formula:**
+  $$\mathbf{P}_{\text{world}} = \mathbf{T}.\text{OfPoint}(\mathbf{P}_{\text{local}}) = \mathbf{Origin} + X \cdot \mathbf{BasisX} + Y \cdot \mathbf{BasisY} + Z \cdot \mathbf{BasisZ}$$
+- **Execution & Validation:**
+  1. Evaluates a synthetic test local point: $\mathbf{P}_{\text{local}} = (2.0, 3.0, 4.0)$.
+  2. Computes transformed point via `transform.OfPoint(localPoint)`.
+  3. Manually calculates $\mathbf{P}_{\text{manual}} = \mathbf{O} + 2\mathbf{B}_x + 3\mathbf{B}_y + 4\mathbf{B}_z$.
+  4. Validates $\|\mathbf{P}_{\text{world}} - \mathbf{P}_{\text{manual}}\| = 0.00000000$.
+  5. Compares with actual `LocationPoint.Point` to demonstrate that `LocationPoint` represents insertion in world space, not local coordinates.
 
 ---
 
 ### Command 07 — `TransformOfVectorCommand`
+*(File: `Commands/Fundamentals/TransformOfVectorCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    subgraph Correct["Transform.OfVector(V) - Pure Direction and Magnitude"]
-        V_LOC["Local Vector - X, Y, Z"] --> OV["OfVector()"]
-        OV --> V_WLD["V_world = X*BasisX + Y*BasisY + Z*BasisZ<br/>Origin is EXCLUDED"]
+    subgraph Correct["Transform.OfVector(V) - Pure Direction & Magnitude"]
+        LV["Local Vector: (2, 3, 4)"] --> TOV["OfVector()"]
+        TOV --> WV["V_world = 2*BasisX + 3*BasisY + 4*BasisZ<br/>(Origin is EXCLUDED)"]
     end
 
-    subgraph Wrong["Erroneous 'Origin + Vector' Operation"]
-        V_WLD --> ERR_ADD["Origin + V_world"]
-        ERR_ADD --> POS["Produces a Position Point, NOT a Vector!"]
+    subgraph ErrorDemo["Incorrect Transformation Anti-Pattern"]
+        WV --> ERR["Origin + V_world"]
+        ERR --> POS["Produces Spatial Position Point, NOT Vector!"]
     end
 
     style Correct fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px
-    style Wrong fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px
+    style ErrorDemo fill:#fee2e2,stroke:#ef4444,stroke-width:1.5px
 ```
 
-- **API Surface:** `Transform.OfVector()`
-- **Core Concept:** Contrasts vector transformation with point transformation. Vectors represent pure direction and magnitude; they possess **no spatial position** and therefore **must ignore the Origin**:
-
-$$\vec{V}_{\text{world}} = \mathbf{T}.\text{OfVector}(\vec{V}_{\text{local}}) = X \cdot \mathbf{BasisX} + Y \cdot \mathbf{BasisY} + Z \cdot \mathbf{BasisZ}$$
-
-- **Key Insight:** Adding `Origin` to a transformed vector results in a meaningless coordinate point in space, violating vector algebra.
-- **Input:** Selected `FamilyInstance`.
-- **Output:** Transformed vector, hand-calculated expansion, error verification, and intentional demonstration of the "Origin + Vector" anti-pattern.
+- **Mathematical Formula:**
+  $$\vec{V}_{\text{world}} = \mathbf{T}.\text{OfVector}(\vec{V}_{\text{local}}) = X \cdot \mathbf{BasisX} + Y \cdot \mathbf{BasisY} + Z \cdot \mathbf{BasisZ}$$
+- **Vector Invariant:** Vector transformation preserves vector magnitude:
+  $$\|\vec{V}_{\text{world}}\| = \|\vec{V}_{\text{local}}\| = \sqrt{2^2 + 3^2 + 4^2} = \sqrt{29} \approx 5.385165$$
+- **Intentional Anti-Pattern Proof:** The command demonstrates that computing $\mathbf{O} + \vec{V}_{\text{world}}$ shifts the vector into an arbitrary position coordinate, violating vector algebra.
 
 ---
 
 ### Command 08 — `PointVsVectorTransformationCommand`
+*(File: `Commands/Fundamentals/PointVsVectorTransformationCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    subgraph PathA["Path A: Transform Points Then Subtract"]
-        PA["Local Point A"] --> TA["OfPoint(A)"]
-        PB["Local Point B"] --> TB["OfPoint(B)"]
-        TA & TB --> SUB1["World Diff = OfPoint(B) - OfPoint(A)"]
+    subgraph PathA["Method 1: Transform Points, Then Subtract"]
+        PA1["Local Point A: (1, 2, 3)"] --> TA1["OfPoint(A) -> World A"]
+        PB1["Local Point B: (5, 7, 9)"] --> TB1["OfPoint(B) -> World B"]
+        TA1 --> SUB1["World Vector 1 = World B - World A"]
+        TB1 --> SUB1
     end
 
-    subgraph PathB["Path B: Subtract Points Then Transform Vector"]
-        PA & PB --> SUB2["Local Vector Delta = B - A"]
-        SUB2 --> TOV["World Vector = OfVector(Delta)"]
+    subgraph PathB["Method 2: Subtract Points, Then Transform Vector"]
+        PA2["Local Point A: (1, 2, 3)"] --> SUB2["Local Delta = B - A = (4, 5, 6)"]
+        PB2["Local Point B: (5, 7, 9)"] --> SUB2
+        SUB2 --> TOV["World Vector 2 = OfVector(Local Delta)"]
     end
 
-    SUB1 & TOV --> PROOF["Mathematical Identity Proof<br/>World Diff is equivalent to World Vector - Error about 0"]
+    SUB1 --> PROOF["Mathematical Identity Verification<br/>Difference = DistanceTo(Vector 1, Vector 2) == 0.00000000"]
+    TOV --> PROOF
 
     style PathA fill:#eff6ff,stroke:#3b82f6
     style PathB fill:#fef3c7,stroke:#f59e0b
     style PROOF fill:#dcfce7,stroke:#15803d,stroke-width:2px
 ```
 
-- **API Surface:** `Transform.OfPoint()`, `Transform.OfVector()`
-- **Core Concept:** Proves the fundamental affine identity that the `Origin` cancels out when computing point differences:
-
-$$\mathbf{T}.\text{OfPoint}(\mathbf{P}_B) - \mathbf{T}.\text{OfPoint}(\mathbf{P}_A) \equiv \mathbf{T}.\text{OfVector}(\mathbf{P}_B - \mathbf{P}_A)$$
-
-- **Mathematical Proof:**
-
-$$\left( \mathbf{O} + \sum_{i} B_i \mathbf{B}_i \right) - \left( \mathbf{O} + \sum_{i} A_i \mathbf{B}_i \right) = \sum_{i} (B_i - A_i)\mathbf{B}_i = \mathbf{T}.\text{OfVector}(\mathbf{P}_B - \mathbf{P}_A)$$
-
-- **Input:** Selected `FamilyInstance` (evaluates test local points $A$ and $B$).
-- **Output:** Comparison of both derivation paths showing identical world-space vectors.
+- **Mathematical Proof Verified at Runtime:**
+  $$\text{Vector Difference} = \| (\mathbf{T}.\text{OfPoint}(B) - \mathbf{T}.\text{OfPoint}(A)) - \mathbf{T}.\text{OfVector}(B - A) \| = 0.00000000$$
+- **Length & Direction Invariance:**
+  - $\|\vec{V}_{\text{local}}\| = \|\vec{V}_{\text{world,1}}\| = \|\vec{V}_{\text{world,2}}\| = \sqrt{4^2 + 5^2 + 6^2} = \sqrt{77} \approx 8.774964$.
+  - Normalized direction vectors $\hat{\mathbf{u}}_1 \equiv \hat{\mathbf{u}}_2$.
 
 ---
 
 ### Command 09 — `InverseTransformCommand`
+*(File: `Commands/Fundamentals/InverseTransformCommand.cs`)*
 
 ```mermaid
 flowchart LR
-    P_LOC["Local Point<br/>P_local"] -->|Transform.OfPoint| P_WLD["Model Space<br/>P_world"]
-    P_WLD -->|Transform.Inverse.OfPoint| P_RECON["Reconstructed<br/>P'_local"]
-    P_RECON -.->|Error about 0| P_LOC
+    subgraph PointLoop["Point Forward/Reverse Round-Trip"]
+        P_LOC["Local Point P"] -->|Transform.OfPoint| P_WLD["World Point"]
+        P_WLD -->|Transform.Inverse.OfPoint| P_REC["Reconstructed Local Point P'"]
+        P_REC -.->|Error < 1e-10| P_LOC
+    end
 
-    V_LOC["Local Vector<br/>V_local"] -->|Transform.OfVector| V_WLD["Model Space<br/>V_world"]
-    V_WLD -->|Transform.Inverse.OfVector| V_RECON["Reconstructed<br/>V'_local"]
-    V_RECON -.->|Error about 0| V_LOC
+    subgraph VectorLoop["Vector Forward/Reverse Round-Trip"]
+        V_LOC["Local Vector V"] -->|Transform.OfVector| V_WLD["World Vector"]
+        V_WLD -->|Transform.Inverse.OfVector| V_REC["Reconstructed Local Vector V'"]
+        V_REC -.->|Error < 1e-10| V_LOC
+    end
+
+    style PointLoop fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px
+    style VectorLoop fill:#eff6ff,stroke:#2563eb,stroke-width:1.5px
 ```
 
-- **API Surface:** `Transform.Inverse`, `Transform.OfPoint()`, `Transform.OfVector()`
-- **Core Concept:** `Transform.Inverse` performs the exact reverse mapping, converting coordinates from global Model-space back into element Local-space:
-
-$$\mathbf{T}^{-1} \cdot \mathbf{T} = \mathbf{I}$$
-
-$$\mathbf{P}'_{\text{local}} = \mathbf{T}^{-1}.\text{OfPoint}\big(\mathbf{T}.\text{OfPoint}(\mathbf{P}_{\text{local}})\big) \approx \mathbf{P}_{\text{local}}$$
-
-- **Input:** Selected `FamilyInstance`.
-- **Output:** Complete forward and reverse coordinate round-trip with residual error verification ($\|\mathbf{P}' - \mathbf{P}\| < 10^{-9}$).
+- **Mathematical Inversion Formulation:**
+  $$\mathbf{T}^{-1} \cdot \mathbf{T} = \mathbf{I}$$
+  $$\mathbf{P}'_{\text{local}} = \mathbf{T}^{-1}.\text{OfPoint}\big(\mathbf{T}.\text{OfPoint}(\mathbf{P}_{\text{local}})\big) = \mathbf{P}_{\text{local}}$$
+  $$\vec{V}'_{\text{local}} = \mathbf{T}^{-1}.\text{OfVector}\big(\mathbf{T}.\text{OfVector}(\vec{V}_{\text{local}})\big) = \vec{V}_{\text{local}}$$
+- **Validation Results:** Point residual error $\|\mathbf{P}' - \mathbf{P}\| < 10^{-10}$ ft and vector residual error $\|\vec{V}' - \vec{V}\| < 10^{-10}$ ft.
 
 ---
 
 ### Command 10 — `TransformNumericalExampleCommand`
+*(File: `Commands/Fundamentals/TransformNumericalExampleCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    subgraph SyntheticSetup["Synthetic Transform Setup - No Revit Model Required"]
+    subgraph Setup["Synthetic Coordinate System (No Project Required)"]
         O["Origin = (100.0, 200.0, 50.0)"]
-        BX["BasisX = (0.0, 1.0, 0.0) - Rotated 90 deg CCW"]
+        BX["BasisX = (0.0, 1.0, 0.0) [Rotated 90 deg CCW in XY]"]
         BY["BasisY = (-1.0, 0.0, 0.0)"]
         BZ["BasisZ = (0.0, 0.0, 1.0)"]
     end
 
-    subgraph MathWalkthrough["Step-by-Step Numerical Walkthrough"]
-        PT["Local P = (10, 5, 2)"] --> FWD["P_world = (100,200,50) + 10*(0,1,0) + 5*(-1,0,0) + 2*(0,0,1)<br/>= (95.0, 210.0, 52.0)"]
-        FWD --> INV["Apply Inverse Transform<br/>Local X = (P_world - O) dot BasisX = (-5, 10, 2) dot (0, 1, 0) = 10.0<br/>Local Y = (P_world - O) dot BasisY = (-5, 10, 2) dot (-1, 0, 0) = 5.0<br/>Local Z = (P_world - O) dot BasisZ = (-5, 10, 2) dot (0, 0, 1) = 2.0"]
-        INV --> MATCH["Reconstructed P_local = (10.0, 5.0, 2.0) - Exact Match"]
+    subgraph ForwardMath["Forward Step-by-Step Substitution"]
+        PT["Local P = (10, 20, 5)"] --> F_PT["P_world = (100,200,50) + 10*(0,1,0) + 20*(-1,0,0) + 5*(0,0,1)<br/>= (100 - 20, 200 + 10, 50 + 5)<br/>= (80.0, 210.0, 55.0)"]
+        VEC["Local V = (10, 20, 5)"] --> F_VEC["V_world = 10*(0,1,0) + 20*(-1,0,0) + 5*(0,0,1)<br/>= (-20.0, 10.0, 5.0) [Origin EXCLUDED]"]
     end
 
-    SyntheticSetup --> MathWalkthrough
+    subgraph InverseMath["Inverse Matrix Step-by-Step Recovery"]
+        F_PT --> I_PT["Local X = (P_world - O) dot BasisX = (-20, 10, 5) dot (0, 1, 0) = 10.0<br/>Local Y = (P_world - O) dot BasisY = (-20, 10, 5) dot (-1, 0, 0) = 20.0<br/>Local Z = (P_world - O) dot BasisZ = (-20, 10, 5) dot (0, 0, 1) = 5.0<br/>-> Recovered Local P = (10.0, 20.0, 5.0) [EXACT MATCH]"]
+        F_VEC --> I_VEC["Local Vx = V_world dot BasisX = (-20, 10, 5) dot (0, 1, 0) = 10.0<br/>Local Vy = V_world dot BasisY = (-20, 10, 5) dot (-1, 0, 0) = 20.0<br/>Local Vz = V_world dot BasisZ = (-20, 10, 5) dot (0, 0, 1) = 5.0<br/>-> Recovered Local V = (10.0, 20.0, 5.0) [EXACT MATCH]"]
+    end
+
+    Setup --> ForwardMath
+    ForwardMath --> InverseMath
 ```
 
-- **API Surface:** `Transform.Identity`, `Transform.OfPoint()`, `Transform.OfVector()`, `Transform.Inverse`
-- **Core Concept:** Pure mathematical validation independent of Revit project files. Demonstrates the forward/inverse matrix mechanics using clean, hand-picked integer coordinates.
-- **Input:** None (100% synthetic math).
-- **Output:** Comprehensive `TaskDialog` detailing the step-by-step numerical proof and the "Final Mental Model".
+- **Core Concept:** 100% synthetic mathematical proof running without selecting any Revit elements. Demonstrates the forward and inverse transformation equations using clean integer coordinates.
+- **Mental Model Summary Table:**
+
+```
+LOCAL POINT  ─── OfPoint() ───►  WORLD POINT  ─── Inverse.OfPoint() ───►  LOCAL POINT
+LOCAL VECTOR ─── OfVector() ──►  WORLD VECTOR ─── Inverse.OfVector() ──►  LOCAL VECTOR
+```
+
+---
+
+## 5. The Bridge — Parameter-Driven 3D Geometry
+
+### Command 05 — `LocationPoint3DAnalysisCommand`
+*(Physical location: `Commands/FamilyGeometry/LocationPoint3DAnalysisCommand.cs`)*
+
+```mermaid
+flowchart TD
+    subgraph Inputs["1. Runtime Inputs"]
+        LP["LocationPoint.Point<br/>Infeed Start Position (P_start)"]
+        T["Transform.BasisX<br/>Horizontal Heading Vector"]
+        P1["Parameter 'Length'<br/>True 3D Hypotenuse (L)"]
+        P2["Parameter 'Infeed'<br/>Elevation (Z_in)"]
+        P3["Parameter 'Outfeed'<br/>Elevation (Z_out)"]
+    end
+
+    subgraph MathDerivation["2. Trigonometric Spatial Derivation"]
+        DZ["Elevation Delta: Delta Z = Z_out - Z_in"]
+        HR["Horizontal Run: H = sqrt(L^2 - Delta Z^2)"]
+        HDIR["Horizontal Unit Vector: u_xy = Normalize(BasisX.X, BasisX.Y, 0)"]
+        DIR3D["3D Unit Direction: Dir_3D = (H/L)*u_xy + (Delta Z/L)*k"]
+        ENDP["Calculated End Point: P_end = P_start + Dir_3D * L"]
+    end
+
+    subgraph Validation["3. Error Verification"]
+        CHK["Verify End Elevation:<br/>abs(P_end.Z - (P_start.Z + Delta Z)) < 1e-8 ft"]
+    end
+
+    Inputs --> MathDerivation
+    MathDerivation --> Validation
+
+    style Inputs fill:#fef3c7,stroke:#d97706
+    style MathDerivation fill:#eff6ff,stroke:#2563eb
+    style Validation fill:#dcfce7,stroke:#16a34a
+```
+
+- **Engineering Context:**
+  Many point-based MEP, conveyor, chute, or equipment families have only a `LocationPoint`. However, physically they represent sloped 3D runs defined by engineering parameters:
+  - `Length` ($L$): True 3D member length (hypotenuse).
+  - `Infeed` ($Z_{\text{in}}$): Start/infeed elevation.
+  - `Outfeed` ($Z_{\text{out}}$): End/outfeed elevation.
+- **Detailed Step-by-Step Mathematical Derivation:**
+
+1. **Elevation Delta:**
+   $$\Delta Z = Z_{\text{outfeed}} - Z_{\text{infeed}}$$
+
+2. **Horizontal Projection (Pythagorean Theorem):**
+   $$L^2 = H^2 + \Delta Z^2 \implies H = \sqrt{L^2 - \Delta Z^2}$$
+   *(If $L^2 < \Delta Z^2$, the command rejects the geometry as physically impossible).*
+
+3. **Horizontal Direction Normalization:**
+   $$\vec{u}_{xy} = \text{Normalize}(\mathbf{B}_{x,x}, \mathbf{B}_{x,y}, 0)$$
+
+4. **3D Direction Vector Assembly & Normalization:**
+   $$\vec{D}_{3D} = \begin{bmatrix}
+   u_{xy,x} \cdot \left(\dfrac{H}{L}\right) \\
+   u_{xy,y} \cdot \left(\dfrac{H}{L}\right) \\
+   \dfrac{\Delta Z}{L}
+   \end{bmatrix}, \quad \|\vec{D}_{3D}\| = \sqrt{\left(\frac{H}{L}\right)^2 (u_x^2 + u_y^2) + \left(\frac{\Delta Z}{L}\right)^2} = \sqrt{\frac{H^2 + \Delta Z^2}{L^2}} = 1.0$$
+
+5. **3D End Point Calculation & Elevation Verification:**
+   $$\mathbf{P}_{\text{end}} = \mathbf{P}_{\text{start}} + \vec{D}_{3D} \times L$$
+   $$\text{Elevation Error} = |\mathbf{P}_{\text{end},z} - (\mathbf{P}_{\text{start},z} + \Delta Z)| \approx 0.00000000 \text{ ft}$$
+
+> [!WARNING]
+> **Family Authoring Convention Dependency:**
+> Command 05 depends on two family authoring conventions:
+> 1. `LocationPoint.Point` represents the **Infeed Start**, not the centroid.
+> 2. `Transform.BasisX` represents the **Longitudinal Heading**.
+> If a family is authored with its insertion point at the center or with heading along $Y$, the calculations must be adapted accordingly.
+
+---
+
+## 6. Part B — Real-World Family Geometry (Deep-Dive Command Reference)
 
 ---
 
 ### Part B — Command 01 — `FamilyPlacementClassificationCommand`
+*(File: `Commands/FamilyGeometry/FamilyPlacementClassificationCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    FI["FamilyInstance Selection"] --> C1["1. Inspect FamilyPlacementType"]
-    C1 --> C2["2. Inspect Actual Runtime Location Type"]
-    C2 --> C3["3. Inspect Host and HostFace"]
-    C3 --> C4["4. Inspect Transform Availability"]
-    C4 --> DECIDE{"Determine Strategy"}
+    FI["Select FamilyInstance"] --> C1["1. Read FamilyPlacementType (Authoring Type)"]
+    C1 --> C2["2. Check Actual Location (Point vs Curve vs Null)"]
+    C2 --> C3["3. Inspect Host & HostFace Reference"]
+    C3 --> C4["4. Test Transform Availability"]
+    C4 --> DECIDE{"Classify Primary Source & Strategy"}
 
-    DECIDE -->|CurveBased| S_CB["Strategy: LocationCurve Extraction"]
-    DECIDE -->|"WorkPlane / Face"| S_FB["Strategy: Host Face Normal Dot-Product"]
-    DECIDE -->|TwoLevelsBased| S_TL["Strategy: Base/Top Elevation Span"]
-    DECIDE -->|OneLevelBased| S_LP["Strategy: LocationPoint + Transform Heading"]
+    DECIDE -->|Has LocationCurve| S_LC["Source: LocationCurve<br/>Strategy: Extract native Start, End, Length; derive Direction"]
+    DECIDE -->|Has LocationPoint| S_LP["Source: LocationPoint<br/>Strategy: Extract Insertion & Rotation; require parameters for 3D run"]
+    DECIDE -->|HostFace Reference| S_HF["Source: HostFace + Transform<br/>Strategy: Evaluate Face Normal; measure BasisZ alignment"]
+    DECIDE -->|TwoLevelsBased| S_TL["Source: Two-Level Placement<br/>Strategy: Inspect Base/Top levels & runtime Location"]
+    DECIDE -->|Transform Only| S_TR["Source: Transform<br/>Strategy: Fallback tri-axial scan; determine physical axis"]
+    DECIDE -->|No Single Source| S_NO["Source: Unidentified<br/>Strategy: Further inspection of parameters/connectors needed"]
+
+    style S_LC fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
+    style S_LP fill:#fef3c7,stroke:#d97706,stroke-width:1.5px
+    style S_HF fill:#e0e7ff,stroke:#4338ca,stroke-width:1.5px
+    style S_TL fill:#fce7f3,stroke:#be185d,stroke-width:1.5px
+    style S_TR fill:#f3e8ff,stroke:#7e22ce,stroke-width:1.5px
+    style S_NO fill:#fee2e2,stroke:#b91c1c,stroke-width:1.5px
 ```
 
-- **API Surface:** `Family.FamilyPlacementType`, `FamilyInstance.Location`, `FamilyInstance.Host`, `FamilyInstance.HostFace`, `FamilyInstance.GetTransform()`
-- **Core Concept:** `FamilyPlacementType` defines authoring architecture, **not an immediate geometry guarantee**. The command classifies four independent runtime facts without attempting to compute geometry.
-- **Input:** Selected `FamilyInstance`.
-- **Output:** Structural classification breakdown and strategy recommendation.
-- **Relationship:** The entry gate and structural roadmap for all of Part B.
+- **Execution Flow:**
+  1. Inspects `Family.FamilyPlacementType`.
+  2. Inspects `familyInstance.Location` (`LocationPoint` vs `LocationCurve`).
+  3. Inspects `familyInstance.Host` and `familyInstance.HostFace`.
+  4. Tests `familyInstance.GetTransform()`.
+  5. Determines and reports the recommended geometric derivation strategy.
 
 ---
 
 ### Part B — Command 03 — `LocationCurveFamilyGeometryCommand`
+*(File: `Commands/FamilyGeometry/LocationCurveFamilyGeometryCommand.cs`)*
 
 ```mermaid
 flowchart TD
     LC["LocationCurve"] --> C["Curve Object"]
-    C --> EP0["GetEndPoint(0) to Start Point - Native"]
-    C --> EP1["GetEndPoint(1) to End Point - Native"]
-    C --> LEN["Curve.Length to True Path Length - Native"]
+    C --> P0["Start Point: curve.GetEndPoint(0) [Native]"]
+    C --> P1["End Point: curve.GetEndPoint(1) [Native]"]
+    C --> LEN["Curve Length: curve.Length [Native]"]
 
-    EP0 & EP1 --> CHORD["Chord Distance = DistanceTo(Start, End)"]
-    EP0 & EP1 --> DIR["Derived 3D Direction = Normalize(End - Start)"]
+    P0 --> CHORD["Chord Distance: DistanceTo(P0, P1)"]
+    P1 --> CHORD
+    P0 --> DIR["3D Direction: (P1 - P0).Normalize()"]
+    P1 --> DIR
 
-    LEN & CHORD --> CMP{"Curve is Straight Line?"}
-    CMP -->|Yes - Line| EQ["Curve.Length == Chord Distance"]
-    CMP -->|No - Arc/Spline| NEQ["Curve.Length greater than Chord Distance - True Arc Length"]
+    LEN --> CMP{"Straight Line vs Curved Arc"}
+    CHORD --> CMP
+    CMP -->|Line| EQ["Curve.Length == Chord Distance"]
+    CMP -->|Arc / Spline| NEQ["Curve.Length > Chord Distance<br/>Curve.Length = True Arc Path<br/>Chord = Straight Distance"]
 ```
 
-- **API Surface:** `LocationCurve.Curve`, `Curve.GetEndPoint(0/1)`, `Curve.Length`, `FamilyInstance.GetTransform()`
-- **Core Concept:** For curve-based instances, Start/End points and Length are native. Direction is derived. Rotation scalar is **explicitly undefined**.
-- **Arc vs. Chord Distinction:**
-
-$$L_{\text{chord}} = \|\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}\| \le L_{\text{curve}}$$
-
-- **Input:** `FamilyInstance` with a `LocationCurve`.
-- **Output:** Endpoint coordinates, path length vs. chord distance, derived direction vector, and confirmation of undefined rotation.
+- **API Surface:** `LocationCurve.Curve`, `Curve.GetEndPoint(0/1)`, `Curve.Length`, `FamilyInstance.GetTransform()`.
+- **Curve vs. Chord Distinction:**
+  $$L_{\text{chord}} = \|\mathbf{P}_1 - \mathbf{P}_0\| \le L_{\text{curve}}$$
+  - For a straight `Line`: $L_{\text{curve}} \approx L_{\text{chord}}$.
+  - For an `Arc` or `NurbSpline`: $L_{\text{curve}} > L_{\text{chord}}$.
+- **Undefined Rotation Principle:** `LocationCurve` provides no native scalar `Rotation` equivalent. The command explicitly refuses to invent a synthetic rotation angle from endpoints alone, directing orientation analysis to `Transform` basis vectors.
 
 ---
 
 ### Part B — Command 04 — `FaceBasedFamilyGeometryCommand`
+*(File: `Commands/FamilyGeometry/FaceBasedFamilyGeometryCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    HF["HostFace Reference"] --> FACE["Face Object<br/>PlanarFace / CylindricalFace"]
-    FACE --> NORM["Host Face Normal Vector - n"]
+    HF["HostFace Reference"] --> FE["Host Element: doc.GetElement(HostFace.ElementId)"]
+    FE --> FACE["Face: hostElement.GetGeometryObjectFromReference(HostFace)"]
+    FACE --> UV["Face Midpoint UV:<br/>u = (min.u + max.u)/2<br/>v = (min.v + max.v)/2"]
+    UV --> NORM["Face Normal Vector:<br/>n = hostFace.ComputeNormal(midpoint).Normalize()"]
 
-    FI["FamilyInstance"] --> T["GetTransform()"]
-    T --> BZ["Transform.BasisZ Vector"]
+    FI["FamilyInstance"] --> T["familyInstance.GetTransform()"]
+    T --> BZ["BasisZ = transform.BasisZ.Normalize()"]
 
-    NORM & BZ --> DOT["Dot Product = BasisZ dot n"]
-    DOT --> CLAMP["Clamp(dot, -1.0, 1.0)"]
-    CLAMP --> ANG["Angle = Acos(dot) * 180 / pi"]
+    NORM --> DOT["Dot Product = BasisZ . n"]
+    BZ --> DOT
+    DOT --> CLAMP["Clamped: Math.Max(-1.0, Math.Min(1.0, Dot))"]
+    CLAMP --> ANG["Angle = acos(Clamped) * 180 / pi"]
 
-    ANG --> REPORT["Report Measured Alignment Angle<br/>Start, End, Length = 'NOT UNIVERSALLY DEFINED'"]
+    ANG --> CLASSIFY{"Classify Normal Relationship"}
+    CLASSIFY -->|Dot > 0.999999| ALIGNED["BasisZ is ALIGNED with Face Normal (0 deg)"]
+    CLASSIFY -->|Dot < -0.999999| OPPOSITE["BasisZ is OPPOSITE to Face Normal (180 deg)"]
+    CLASSIFY -->|Otherwise| NONPARALLEL["BasisZ is NOT PARALLEL to Face Normal"]
 ```
 
-- **API Surface:** `FamilyInstance.HostFace`, `Element.GetGeometryObjectFromReference()`, `Face.ComputeNormal()`, `Transform.BasisZ`
-- **Core Concept:** Face-hosted instances do not have native Start/End/Length. The spatial relationship between `Transform.BasisZ` and the host face normal $\hat{\mathbf{n}}$ is **measured**, never assumed:
-
-$$\text{dot} = \mathbf{B}_z \cdot \hat{\mathbf{n}}$$
-
-$$\theta = \arccos\big(\operatorname{clamp}(\text{dot}, -1.0, 1.0)\big) \times \frac{180^\circ}{\pi}$$
-
-- **Input:** `FamilyInstance` hosted on a geometric face.
-- **Output:** Host details, face normal vector, `BasisZ` vector, measured alignment angle, and explicit "Not Universally Defined" markers for endpoints and length.
+- **Execution Flow & UV Midpoint Evaluation:**
+  1. Retrieves host face reference via `familyInstance.HostFace`.
+  2. Resolves geometric `Face` using `hostElement.GetGeometryObjectFromReference(hostFaceReference)`.
+  3. Computes UV bounding box midpoint:
+     $$u_{\text{mid}} = \frac{u_{\min} + u_{\max}}{2}, \quad v_{\text{mid}} = \frac{v_{\min} + v_{\max}}{2}$$
+  4. Evaluates normal vector at midpoint: $\hat{\mathbf{n}} = \text{Normalize}(\text{Face}.\text{ComputeNormal}(u_{\text{mid}}, v_{\text{mid}}))$.
+  5. Computes dot product $\text{dot} = \mathbf{B}_z \cdot \hat{\mathbf{n}}$ and angular separation $\theta = \arccos(\text{clamp}(\text{dot}, -1.0, 1.0)) \times \frac{180^\circ}{\pi}$.
+- **Main Geometric Values Classification:**
+  - **Start Point / End Point / Length:** Reported as `"Not Universally Defined by Face Placement"`.
+  - **Rotation / Direction:** Derived from `Transform.BasisX/Y/Z` relative to the face tangent plane.
 
 ---
 
 ### Part B — Command 05 — `TwoLevelFamilyGeometryCommand`
+*(File: `Commands/FamilyGeometry/TwoLevelFamilyGeometryCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    subgraph LevelData["1. Level Architecture - Z-Span"]
-        BL["Base Level - Elevation Z_base"]
-        TL["Top Level - Elevation Z_top"]
-        LV["Level Vector = (0, 0, Z_top - Z_base)"]
-        BL & TL --> LV
+    subgraph LevelData["1. Level Architecture (Z-Span)"]
+        P_BASE["FAMILY_BASE_LEVEL_PARAM"] --> L_BASE["Base Level (Elevation Z_base)"]
+        P_TOP["FAMILY_TOP_LEVEL_PARAM"] --> L_TOP["Top Level (Elevation Z_top)"]
+        L_BASE --> LV["Level Span Vector = (0, 0, Z_top - Z_base)"]
+        L_TOP --> LV
     end
 
-    subgraph RuntimeLoc["2. Runtime Location Subtype"]
-        LOC["Instance Location"] --> LP["LocationPoint - Vertical Column"]
-        LOC --> LC["LocationCurve - Slanted Column"]
+    subgraph RuntimeLoc["2. Runtime Location Polymorphism"]
+        LOC["Instance Location"] -->|LocationPoint| LP_BR["Vertical Column:<br/>Start = Insertion Point<br/>Rotation = Native radians<br/>End/Length = NOT in LocationPoint"]
+        LOC -->|LocationCurve| LC_BR["Slanted Column:<br/>Start = GetEndPoint(0)<br/>End = GetEndPoint(1)<br/>Length = Curve.Length<br/>Direction = Normalize(End - Start)"]
     end
 
-    subgraph Warning["3. Physical Axis Distinction"]
-        LV & LC --> CAUTION["CAUTION: Level Vector (0,0,Delta Z) is NOT<br/>always the Physical Member Axis!"]
+    subgraph Caution["3. Architectural Safety Warning"]
+        LV --> WARN["CAUTION: For slanted columns, Level-to-Level Vector<br/>(0, 0, Delta Z) is NOT the physical member axis!"]
+        LC_BR --> WARN
     end
 
-    style Warning fill:#fffbeb,stroke:#f59e0b,stroke-width:1.5px
+    style Caution fill:#fffbeb,stroke:#f59e0b,stroke-width:1.5px
 ```
 
-- **API Surface:** `BuiltInParameter.FAMILY_BASE_LEVEL_PARAM`, `FAMILY_TOP_LEVEL_PARAM`, `Level.Elevation`, `LocationPoint`, `LocationCurve`, `Transform`
-- **Core Concept:** For `TwoLevelsBased` elements (e.g. columns), the vertical level span is an independent constraint from the actual runtime `Location`.
-- **Key Warning:** The Level-to-Level vertical vector $(0, 0, Z_{\text{top}} - Z_{\text{base}})$ is **not** automatically the physical member direction for slanted members.
-- **Input:** `FamilyInstance` with `FamilyPlacementType.TwoLevelsBased`.
-- **Output:** Base/Top level elevations, runtime location data, and level span vector with physical orientation warnings.
+- **Execution Flow:**
+  1. Validates `FamilyPlacementType == FamilyPlacementType.TwoLevelsBased`.
+  2. Reads Base Level via `familyInstance.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM).AsElementId()`.
+  3. Reads Top Level via `familyInstance.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM).AsElementId()`.
+  4. Calculates level elevation span: $\Delta Z_{\text{levels}} = Z_{\text{top}} - Z_{\text{base}}$.
+  5. Checks runtime `Location` (`LocationPoint` for standard vertical columns vs `LocationCurve` for slanted columns).
+  6. Emits explicit warnings that $\Delta Z_{\text{levels}}$ does not represent physical member length for slanted columns.
 
 ---
 
 ### Part B — Command 06 — `TransformBasedFamilyGeometryCommand`
+*(File: `Commands/FamilyGeometry/TransformBasedFamilyGeometryCommand.cs`)*
 
 ```mermaid
 flowchart TD
-    LC["LocationCurve"] --> DC["Physical Curve Direction - D_curve"]
-    T["GetTransform()"] --> BX["BasisX"]
+    LC["LocationCurve (If Present)"] --> DC["Physical Curve Direction: D_curve"]
+    T["familyInstance.GetTransform()"] --> BX["BasisX"]
     T --> BY["BasisY"]
     T --> BZ["BasisZ"]
 
-    DC & BX --> DX["Dot_X = abs(D_curve dot BasisX) to Theta_X"]
-    DC & BY --> DY["Dot_Y = abs(D_curve dot BasisY) to Theta_Y"]
-    DC & BZ --> DZ["Dot_Z = abs(D_curve dot BasisZ) to Theta_Z"]
+    DC --> DX["Dot_X = abs(D_curve . BasisX) -> Theta_X"]
+    BX --> DX
+    DC --> DY["Dot_Y = abs(D_curve . BasisY) -> Theta_Y"]
+    BY --> DY
+    DC --> DZ["Dot_Z = abs(D_curve . BasisZ) -> Theta_Z"]
+    BZ --> DZ
 
-    DX & DY & DZ --> MATCH{"Find Maximum Dot Product"}
-    MATCH --> RES["Identify Aligned Basis Axis<br/>Measured, Never Assumed!"]
+    DX --> MAX{"Find Maximum Absolute Dot Product"}
+    DY --> MAX
+    DZ --> MAX
+    MAX -->|absX >= absY & absZ| RX["Closest Physical Axis = BasisX"]
+    MAX -->|absY >= absX & absZ| RY["Closest Physical Axis = BasisY"]
+    MAX -->|absZ >= absX & absY| RZ["Closest Physical Axis = BasisZ"]
 ```
 
-- **API Surface:** `FamilyInstance.GetTransform()`, `Transform.BasisX/BasisY/BasisZ`, `LocationCurve`, `XYZ.DotProduct`
-- **Core Concept:** Universal fallback for any `FamilyInstance`. When a physical direction exists (e.g. from a `LocationCurve`), it is tested against all three Basis vectors to discover which axis represents the physical length:
-
-$$\text{dot}_i = \vec{D}_{\text{curve}} \cdot \mathbf{B}_i, \quad \theta_i = \arccos\big(\operatorname{clamp}(\text{dot}_i, -1.0, 1.0)\big) \quad \text{for } i \in \{X, Y, Z\}$$
-
-$$\text{Aligned Axis} = \arg\max_{i \in \{X,Y,Z\}} |\text{dot}_i|$$
-
-- **Input:** Any `FamilyInstance`.
-- **Output:** Basis axes listing, dot products and angles against curve direction, and identification of the aligned axis.
+- **Engineering Problem:**
+  `Transform.BasisX`, `BasisY`, `BasisZ` describe how an instance is oriented in 3D space, but the API does not declare which axis represents physical member length, width, or depth.
+- **The Tri-Axial Dot Product Scanning Algorithm:**
+  1. Computes physical curve direction $\vec{D}_{\text{curve}} = \text{Normalize}(\mathbf{P}_1 - \mathbf{P}_0)$ when `LocationCurve` exists.
+  2. Computes projection of $\vec{D}_{\text{curve}}$ onto all three basis vectors:
+     $$\text{dot}_X = \vec{D}_{\text{curve}} \cdot \mathbf{B}_x, \quad \theta_X = \arccos\big(\text{clamp}(|\text{dot}_X|, -1.0, 1.0)\big) \times \frac{180^\circ}{\pi}$$
+     $$\text{dot}_Y = \vec{D}_{\text{curve}} \cdot \mathbf{B}_y, \quad \theta_Y = \arccos\big(\text{clamp}(|\text{dot}_Y|, -1.0, 1.0)\big) \times \frac{180^\circ}{\pi}$$
+     $$\text{dot}_Z = \vec{D}_{\text{curve}} \cdot \mathbf{B}_z, \quad \theta_Z = \arccos\big(\text{clamp}(|\text{dot}_Z|, -1.0, 1.0)\big) \times \frac{180^\circ}{\pi}$$
+  3. Identifies the physically aligned axis:
+     $$\text{Aligned Axis} = \arg\max \big( |\text{dot}_X|, |\text{dot}_Y|, |\text{dot}_Z| \big)$$
+- **Fallback when no curve exists:** Reports all three candidate basis axes and flags that semantic meaning must be resolved from family definition or parameters.
 
 ---
 
-## 5. The Five Main Geometric Values
+## 7. The Five Core Geometric Values Resolution Matrix
 
-```mermaid
-flowchart TD
-    subgraph Values["The 5 Core Values"]
-        V1["Length"]
-        V2["Start Point"]
-        V3["End Point"]
-        V4["3D Direction"]
-        V5["Rotation"]
-    end
+The complete architectural resolution rules across all Revit element placement types:
 
-    subgraph Resolution["How They Are Resolved"]
-        R_NAT["Native API Property<br/>e.g., LocationPoint.Point, Curve.Length"]
-        R_DER["Derived Vector Math<br/>e.g., Normalize(End - Start), Atan2"]
-        R_PAR["Parameter-Driven Math<br/>e.g., Infeed/Outfeed Pythagorean H"]
-        R_UND["Explicitly Undefined / Case-Specific<br/>e.g., Rotation for LocationCurve"]
-    end
-
-    V1 --> R_NAT & R_PAR & R_UND
-    V2 --> R_NAT & R_PAR
-    V3 --> R_NAT & R_DER & R_PAR
-    V4 --> R_DER & R_UND
-    V5 --> R_NAT & R_DER & R_UND
-
-    style Values fill:#f8fafc,stroke:#64748b,stroke-width:1.5px
-    style Resolution fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px
-```
-
-| Geometric Value | Native in API? | Providing API (When Native) | Derivation Formula (When Derived) | Depends on Placement Type? | Depends on Custom Params? | Classification Summary |
-|---|:---:|---|---|:---:|:---:|---|
-| **Length** | **Sometimes** | `Curve.Length` (`LocationCurve`) | Reconstructed from parameter: $H = \sqrt{L^2 - \Delta Z^2}$ | Yes (only guaranteed for `CurveBased`) | Yes (when no `LocationCurve` exists) | **Case-Specific** |
-| **Start Point** | **Sometimes** | `LocationPoint.Point` or `Curve.GetEndPoint(0)` | Assumed equal to parameter insertion point (e.g. Infeed convention) | Yes | Sometimes (Family authoring convention) | **Case-Specific** |
-| **End Point** | **Sometimes** | `Curve.GetEndPoint(1)` | $\mathbf{P}_{\text{start}} + \vec{D} \times L$ | Yes | Yes (when derived from parameter length/slope) | **Case-Specific** |
-| **3D Direction** | **Rarely** | — | $\operatorname{Normalize}(\mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}})$, or matching $\max \lvert\mathbf{B}_i \cdot \vec{D}\rvert$ | Yes | Sometimes | **Case-Specific** (Measured, not assumed) |
-| **Rotation** | **Sometimes** | `LocationPoint.Rotation` | $\operatorname{atan2}(D_y, D_x)$ for 2D horizontal heading | Yes | No | **Case-Specific** (Undefined for 3D curves) |
-
-> [!CAUTION]
-> **Explicit Undefined Values:** The module never claims all five values exist for every element. Commands explicitly report `"Not directly available"` or `"Not universally defined"` when geometry is unsupported.
+| Geometric Value | Native API Property | Derived Formulation | Parameter-Driven Formulation | Face / Point Fallback |
+|---|---|---|---|---|
+| **Length** | `LocationCurve.Curve.Length` | `N/A` | Reconstructed from parameter: $H = \sqrt{L^2 - \Delta Z^2}$ | `Not Universally Defined` |
+| **Start Point** | `LocationPoint.Point`<br/>`Curve.GetEndPoint(0)` | `N/A` | Infeed parameter convention at `LocationPoint.Point` | `Not Universally Defined` (Face) |
+| **End Point** | `Curve.GetEndPoint(1)` | $\mathbf{P}_{\text{start}} + \vec{D} \times L$ | $\mathbf{P}_{\text{start}} + \vec{D}_{3D} \times L$ | `Not Universally Defined` (Face/Point) |
+| **3D Direction** | — | $\text{Normalize}(\mathbf{P}_1 - \mathbf{P}_0)$ | $\left(\frac{H}{L}\right)\hat{\mathbf{u}}_{xy} + \left(\frac{\Delta Z}{L}\right)\hat{\mathbf{k}}$ | Measured via $\arg\max_i \|\vec{D} \cdot \mathbf{B}_i\|$ |
+| **Rotation** | `LocationPoint.Rotation` (rad) | 2D: $\text{atan2}(D_y, D_x) \times \frac{180}{\pi}$ | `LocationPoint.Rotation` | `Transform` basis vectors relative to host face |
 
 ---
 
-## 6. Location Architecture
+## 8. Defensive Coding Patterns in the Codebase
 
-```mermaid
-classDiagram
-    class Location {
-        <<abstract>>
-    }
-    class LocationPoint {
-        +XYZ Point [Native]
-        +double Rotation [Native, radians]
-        +GetDirection() [Derived from Transform]
-    }
-    class LocationCurve {
-        +Curve Curve [Native]
-        +GetEndPoint_0() [Native Start]
-        +GetEndPoint_1() [Native End]
-        +double Length [Native Path Length]
-        +GetDirection() [Derived]
-        +double ChordDistance [Derived]
-    }
-
-    Location <|-- LocationPoint
-    Location <|-- LocationCurve
-```
-
-### The Defensive Casting Pattern
-
-`element.Location` returns the abstract base class `Location`. Direct blind casting causes runtime `NullReferenceException` errors. Every command in this module implements safe defensive type checks:
+### 8.1 Defensive Location Casting Pattern
 
 ```csharp
-// Standard Defensive Pattern used across all commands
+// Standard Defensive Pattern applied across all TransformModule commands
+Location location = element.Location;
+if (location == null)
+{
+    // Handle elements without spatial location records
+    return Result.Failed;
+}
+
 LocationPoint locationPoint = location as LocationPoint;
 LocationCurve locationCurve = location as LocationCurve;
 
 if (locationPoint != null)
 {
     XYZ insertionPoint = locationPoint.Point;
-    double rotationAngle = locationPoint.Rotation;
+    double rotationRadians = locationPoint.Rotation;
     // Process point-based geometry...
 }
 else if (locationCurve != null)
@@ -734,277 +846,104 @@ else if (locationCurve != null)
 }
 else
 {
-    // Explicitly handle unsupported or null runtime location types
+    // Explicitly handle unhandled location types
 }
 ```
 
-```mermaid
-flowchart LR
-    subgraph StraightLine["Straight Line Curve"]
-        S1["Start (0)"] ---|Curve.Length == Chord| E1["End (1)"]
-    end
-    subgraph ArcCurve["Curved Arc / Spline Curve"]
-        S2["Start (0)"] -.->|Straight Chord Distance| E2["End (1)"]
-        S2 ===|True Curve.Length - Arc Path| E2
-    end
-```
+### 8.2 Safe Vector Normalization & Angle Clamping Pattern
 
-- **`Curve.Length` vs. Chord Distance:** For straight lines, `Curve.Length ≈ Distance(Start, End)`. For arcs or splines, `Curve.Length` is the true integral arc length, whereas `Distance(Start, End)` is the shorter chord distance.
+```csharp
+// Guard against zero-length vectors
+XYZ rawVector = endPoint - startPoint;
+if (rawVector.GetLength() <= 1e-9)
+{
+    // Handle degenerate zero-length geometry
+    return Result.Failed;
+}
+XYZ direction = rawVector.Normalize();
+
+// Guard against floating-point drift in dot product before Acos
+double dotProduct = direction.DotProduct(basisVector);
+double clampedDot = Math.Max(-1.0, Math.Min(1.0, dotProduct));
+double angleDegrees = Math.Acos(clampedDot) * 180.0 / Math.PI;
+```
 
 ---
 
-## 7. Family Placement Architecture
+## 9. Architectural Gaps and Missing Commands
 
-```mermaid
-classDiagram
-    class Family {
-        +FamilyPlacementType PlacementType
-    }
-    class FamilySymbol {
-        +string Name
-    }
-    class FamilyInstance {
-        +Location Location
-        +GetTransform() Transform
-        +Element Host
-        +Reference HostFace
-        +LookupParameter(name) Parameter
-    }
-
-    Family --> FamilySymbol : Defines Types
-    FamilySymbol --> FamilyInstance : Instantiates
-```
-
-```mermaid
-flowchart TD
-    A["FamilyPlacementType<br/>OneLevelBased, TwoLevelsBased, WorkPlaneBased, CurveBased, Adaptive"]
-    A -->|Describes| B["Authoring Architecture<br/>How Revit allows family to be placed"]
-    B -.->|DOES NOT GUARANTEE| C["Runtime Geometry<br/>Does not guarantee Length, Curve, or Face normal exists"]
-
-    style C fill:#fee2e2,stroke:#ef4444,stroke-width:2px
-```
-
-### The Part B Verification Discipline
+Codebase inspection reveals three architectural areas referenced in guidance but not yet implemented:
 
 ```mermaid
 flowchart LR
-    subgraph Step1["Step 1: Inspect Runtime Evidence"]
-        I1["1. FamilyPlacementType"]
-        I2["2. Actual Location Subtype"]
-        I3["3. Host and HostFace"]
-        I4["4. Transform Axes"]
-        I5["5. Instance Parameters"]
+    subgraph Implemented["Implemented Commands (15 Total)"]
+        PA["Part A: Commands 01 - 10 (9 Files)"]
+        BR["Bridge: Command 05 (1 File)"]
+        PB["Part B: Commands 01, 03, 04, 05, 06 (5 Files)"]
     end
 
-    subgraph Step2["Step 2: Derive Supported Values"]
-        D1["Start Point"]
-        D2["End Point"]
-        D3["3D Direction"]
-        D4["Rotation"]
-        D5["Actual Length"]
-    end
-
-    Step1 -->|Derive ONLY what evidence supports| Step2
-
-    style Step1 fill:#eff6ff,stroke:#2563eb
-    style Step2 fill:#f0fdf4,stroke:#16a34a
-```
-
----
-
-## 8. The Transform Concept
-
-A `Transform` represents a 3D affine transformation matrix mapping local coordinates $(x,y,z)$ to global world coordinates $(X,Y,Z)$:
-
-$$\mathbf{T} = \begin{bmatrix}
-\mathbf{BasisX}_x & \mathbf{BasisY}_x & \mathbf{BasisZ}_x & \mathbf{Origin}_x \\
-\mathbf{BasisX}_y & \mathbf{BasisY}_y & \mathbf{BasisZ}_y & \mathbf{Origin}_y \\
-\mathbf{BasisX}_z & \mathbf{BasisY}_z & \mathbf{BasisZ}_z & \mathbf{Origin}_z \\
-0 & 0 & 0 & 1
-\end{bmatrix}$$
-
-```mermaid
-flowchart TD
-    subgraph TransformComponents["Transform Structure"]
-        O["Origin - XYZ<br/>Position of Local (0,0,0) in World Space"]
-        BX["BasisX - XYZ<br/>Local X-Axis Direction Vector"]
-        BY["BasisY - XYZ<br/>Local Y-Axis Direction Vector"]
-        BZ["BasisZ - XYZ<br/>Local Z-Axis Direction Vector"]
-    end
-
-    subgraph Rule["Coordinate System vs. Business Meaning"]
-        R["RULE:<br/>BasisX/Y/Z tell us HOW the family is oriented in space.<br/>They do NOT automatically declare WHICH axis represents the business meaning of 'Length'!"]
-    end
-
-    TransformComponents --> Rule
-    style Rule fill:#fef2f2,stroke:#dc2626,stroke-width:1.5px
-```
-
----
-
-## 9. Mathematical Concepts Used
-
-| Mathematical Concept | Formal Definition | Commands Used In |
-|---|---|---|
-| Vector Subtraction | $\vec{V} = \mathbf{P}_{\text{end}} - \mathbf{P}_{\text{start}}$ | Cmd 02, 03, 04, 08, Part B 03, 05, 06 |
-| Vector Normalization | $\hat{\mathbf{u}} = \dfrac{\vec{V}}{\lVert\vec{V}\rVert} = \dfrac{\vec{V}}{\sqrt{V_x^2 + V_y^2 + V_z^2}}$ | Cmd 02, 03, 04, 06, 07, 08, 09, Part B 03–06 |
-| Dot Product | $\vec{A} \cdot \vec{B} = A_x B_x + A_y B_y + A_z B_z = \lVert\vec{A}\rVert\lVert\vec{B}\rVert\cos\theta$ | Part B 04, Part B 06 |
-| Angle Calculation | $\theta = \arccos\left(\operatorname{clamp}\left(\dfrac{\vec{A} \cdot \vec{B}}{\lVert\vec{A}\rVert\lVert\vec{B}\rVert}, -1, 1\right)\right) \times \dfrac{180^\circ}{\pi}$ | Part B 04, Part B 06 |
-| Euclidean Distance | $\lVert\mathbf{P}_2 - \mathbf{P}_1\rVert = \sqrt{\sum (P_{2,i} - P_{1,i})^2}$ | Cmd 06, 07, 08, 09, 10, Part B 03 |
-| Point Transformation | $\mathbf{P}_{\text{world}} = \mathbf{O} + X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ | Cmd 06, 08, 09, 10 |
-| Vector Transformation | $\vec{V}_{\text{world}} = X\mathbf{B}_x + Y\mathbf{B}_y + Z\mathbf{B}_z$ | Cmd 07, 08, 09, 10 |
-| Inverse Transform | $\mathbf{T}^{-1} \cdot \mathbf{T} = \mathbf{I}$ | Cmd 09, 10 |
-| Numerical Clamp | $\operatorname{clamp}(v, \min, \max) = \max(\min, \min(\max, v))$ | Part B 04, Part B 06 |
-| Cross Product | $\vec{A} \times \vec{B} = \det\begin{bmatrix} \hat{\mathbf{i}} & \hat{\mathbf{j}} & \hat{\mathbf{k}} \\ A_x & A_y & A_z \\ B_x & B_y & B_z \end{bmatrix}$ | Not used in current module |
-
----
-
-## 10. Family Geometry Strategy
-
-The complete decision tree implemented by `FamilyPlacementClassificationCommand` and realized across Part B:
-
-```mermaid
-flowchart TD
-    FI[Select FamilyInstance] --> PT[Inspect FamilyPlacementType]
-    PT --> RT["Inspect Actual Runtime Data<br/>Do not trust placement type alone"]
-
-    RT --> LC{Has LocationCurve?}
-    LC -->|Yes| LCG["Part B - Cmd 03: LocationCurve Strategy<br/>Start = GetEndPoint(0)<br/>End = GetEndPoint(1)<br/>Length = Curve.Length<br/>Direction = Normalize(End - Start)<br/>Rotation = Undefined"]
-
-    LC -->|No| LP{Has LocationPoint?}
-    LP -->|Yes| LPG["Part B - Cmd 02 Gap / Cmd 05 Bridge<br/>Point = LocationPoint.Point<br/>Rotation = LocationPoint.Rotation<br/>Parameters needed for Length/Direction"]
-
-    LP -->|No| HF{HostFace Available?}
-    HF -->|Yes| FBG["Part B - Cmd 04: Face-Based Strategy<br/>Measure BasisZ vs. Face Normal angle<br/>Start / End / Length = Undefined"]
-
-    HF -->|No| TL{TwoLevelsBased?}
-    TL -->|Yes| TLG["Part B - Cmd 05: Two-Level Strategy<br/>Base / Top Level Elevation Span<br/>Inspect Point vs. Curve Location"]
-
-    TL -->|No| TR{Transform Available?}
-    TR -->|Yes| TBG["Part B - Cmd 06: Transform Fallback<br/>Tri-axial dot product against curve direction<br/>Find physically aligned axis"]
-
-    TR -->|No| NA["No Single Native Source<br/>Inspect Connectors, Adaptive Points, or Parameters"]
-
-    LCG --> REPORT["Output Structured Geometry Report with Data Lineage"]
-    LPG --> REPORT
-    FBG --> REPORT
-    TLG --> REPORT
-    TBG --> REPORT
-    NA --> REPORT
-
-    style LCG fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px
-    style LPG fill:#fef3c7,stroke:#d97706,stroke-width:1.5px
-    style FBG fill:#e0e7ff,stroke:#4338ca,stroke-width:1.5px
-    style TLG fill:#fce7f3,stroke:#be185d,stroke-width:1.5px
-    style TBG fill:#f3e8ff,stroke:#7e22ce,stroke-width:1.5px
-    style NA fill:#fee2e2,stroke:#b91c1c,stroke-width:1.5px
-```
-
----
-
-## 11. Remaining Commands
-
-```mermaid
-flowchart LR
-    subgraph CompletedCommands["Implemented Commands - 15 Total"]
-        PA_ALL["Part A: Commands 01 - 10 - 10 Commands"]
-        PB_DONE["Part B: Commands 01, 03, 04, 05, 06 - 5 Commands"]
-    end
-
-    subgraph IdentifiedGaps["Identified Architectural Gaps - 3 Commands"]
+    subgraph Gaps["Identified Architectural Gaps (3 Commands)"]
         G1["Part B - Command 02<br/>Generic LocationPoint Family Geometry"]
         G2["Adaptive Family Geometry Command<br/>AdaptiveComponentInstanceUtils Inspection"]
         G3["View-Based Family Geometry Command<br/>View.RightDirection / UpDirection Coordinate Systems"]
     end
 
-    CompletedCommands -.-> IdentifiedGaps
+    Implemented -.-> Gaps
 
-    style CompletedCommands fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
-    style IdentifiedGaps fill:#fff1f2,stroke:#e11d48,stroke-width:2px
+    style Implemented fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
+    style Gaps fill:#fff1f2,stroke:#e11d48,stroke-width:2px
 ```
 
-### 1. Part B - Command 02 — Expected: `LocationPointFamilyGeometryCommand`
-- **Why Needed:** Parallel generic counterpart to `LocationCurveFamilyGeometryCommand` (Part B - Cmd 03).
-- **Distinction from Command 05:** Command 05 is a *custom parameter-driven* case (hardcoded `Length`/`Infeed`/`Outfeed`), not a generic point-based inspection command.
-- **Status:** **Not implemented in current codebase.**
-
-### 2. Adaptive-based Family Geometry Command
-- **Why Needed:** Explicitly cited in `FamilyPlacementClassificationCommand` guidance switch (*"Inspect adaptive placement points"*).
-- **Required APIs:** `AdaptiveComponentInstanceUtils.GetInstancePlacementPointElementRefIds()`.
-- **Status:** **Not implemented in current codebase.**
-
-### 3. ViewBased Family Geometry Command
-- **Why Needed:** Explicitly cited in `FamilyPlacementClassificationCommand` (*"Inspect view coordinate system and instance placement"*).
-- **Required APIs:** `View.RightDirection`, `View.UpDirection`, `View.ViewDirection`.
-- **Status:** **Not implemented in current codebase.**
+1. **Part B — Command 02 (`LocationPointFamilyGeometryCommand`):**
+   - *Why Needed:* Direct counterpart to `LocationCurveFamilyGeometryCommand` (Part B - Cmd 03) for standard point-based families without custom conveyor parameters.
+   - *Status:* **Missing from codebase.**
+2. **Adaptive Component Geometry Command:**
+   - *Why Needed:* Cited in `FamilyPlacementClassificationCommand` guidance switch (`FamilyPlacementType.Adaptive`).
+   - *Required APIs:* `AdaptiveComponentInstanceUtils.GetInstancePlacementPointElementRefIds()`.
+   - *Status:* **Missing from codebase.**
+3. **View-Based Family Geometry Command:**
+   - *Why Needed:* Cited in `FamilyPlacementClassificationCommand` guidance switch (`FamilyPlacementType.ViewBased`).
+   - *Required APIs:* `View.RightDirection`, `View.UpDirection`, `View.ViewDirection`.
+   - *Status:* **Missing from codebase.**
 
 ---
 
-## 12. Observations / Potential Issues
+## 10. Codebase Audit Observations and Technical Inconsistencies
 
-> [!NOTE]
-> The following architectural and structural observations are documented directly from codebase inspection without modifying source code:
-
-1. **Filename vs. Class Name Mismatch:** `PointAndVectorMathematicsCommand.cs` contains the class `LocationGeometryAnalysisCommand` (Command 03).
-2. **Namespace Consistency:** `Fundamentals/` commands use `RevitApiSamples.Samples.TransformModule.Commands.Fundamentals`.
-3. **Command 05 Physical File Location:** `LocationPoint3DAnalysisCommand` is numbered "Command 05" in Part A's sequence but lives physically in `Commands/FamilyGeometry/`.
-4. **Numbering Scheme Overlap at "05":** Global sequence Command 05 and Part B Command 05 (`TwoLevelFamilyGeometryCommand`) share the number 05 across folders.
-5. **Duplicated Clamping Logic:** `TransformBasedFamilyGeometryCommand` defines a private `Clamp` method; `FaceBasedFamilyGeometryCommand` re-implements it inline as `Math.Max(-1.0, Math.Min(1.0, dot))`.
-6. **Inconsistent Floating-Point Tolerances:** `1e-9` is used ad-hoc across Commands 05, Part B 03, and Part B 05; `TransformBasedFamilyGeometryCommand` defines a named `private const double Tolerance = 1e-6` (two orders of magnitude looser).
-7. **Hardcoded Parameter Names in Command 05:** Relies on hardcoded string constants (`"Length"`, `"Infeed"`, `"Outfeed"`), which are specific family authoring conventions rather than Revit API standards.
-8. **Inspection vs. Derivation Overlap:** Commands 02, 03, and 04 inspect the same `LocationPoint`/`LocationCurve` API surface with incremental degrees of derived detail.
-9. **Absence of Cross Product ($\vec{A} \times \vec{B}$):** No command currently uses vector cross products for 3-axis orientation reconstruction.
-10. **Inline Command Numbering Comments:** Inconsistent use of `// Command NN` header comments across Part A and Part B source files.
+1. **Filename vs. Class Name Discrepancy:** `PointAndVectorMathematicsCommand.cs` defines the class `LocationGeometryAnalysisCommand` (Command 03).
+2. **Global vs. Part B Numbering Overlap at "05":**
+   - Global Sequence Command 05: `LocationPoint3DAnalysisCommand` (stored in `FamilyGeometry/`).
+   - Part B Command 05: `TwoLevelFamilyGeometryCommand` (also stored in `FamilyGeometry/`).
+3. **Tolerance Inconsistencies across Commands:**
+   - Commands 05, Part B 03, and Part B 05 use ad-hoc inline tolerance `1e-9`.
+   - Command Part B 06 defines a class constant `private const double Tolerance = 1e-6` (three orders of magnitude looser).
+4. **Duplicate Clamping Implementations:**
+   - `TransformBasedFamilyGeometryCommand` encapsulates a private static `Clamp(double value, double min, double max)` helper method.
+   - `FaceBasedFamilyGeometryCommand` uses inline `Math.Max(-1.0, Math.Min(1.0, dot))`.
+5. **Hardcoded Parameter Name Constants:** Command 05 uses literal string constants (`"Length"`, `"Infeed"`, `"Outfeed"`), making it specific to certain company family authoring standards.
+6. **Absence of Vector Cross Product ($\vec{A} \times \vec{B}$):** While vector subtraction, normalization, and dot products are heavily utilized, 3D cross products are not currently implemented for coordinate frame reconstruction.
 
 ---
 
-## 13. Transform Module Learning Roadmap
+## 11. Transform Module Learning Progression Timeline
 
 ```mermaid
 timeline
-    title Transform Module Learning Progression
+    title Transform Module Educational Progression
     section Phase 1 : Fundamentals
         Transform Structure : Command 01 - Origin, BasisX, BasisY, BasisZ
-        Location Polymorphism : Commands 02 and 03 - LocationPoint vs LocationCurve
-        Derivation and Angles : Command 04 - End = Start + Dir * Len, Atan2
-    section Phase 2 : Affine Math
-        Transform.OfPoint : Command 06 - Origin + X BasisX + Y BasisY + Z BasisZ
-        Transform.OfVector : Command 07 - Origin Excluded
-        Identity Proof : Command 08 - OfPoint difference equals OfVector difference
-        Inverse Round-Trip : Commands 09 and 10 - Model to Local Inversion
-    section Phase 3 : Family Geometry
-        Parameter Bridge : Command 05 - 3D Sloped Conveyor Run
+        Location Polymorphism : Commands 02 & 03 - LocationPoint vs LocationCurve
+        Derivation & Heading : Command 04 - End = Start + Dir * Len, Atan2
+    section Phase 2 : Affine Mechanics
+        Point Transformation : Command 06 - P_world = Origin + xBx + yBy + zBz
+        Vector Transformation : Command 07 - V_world = xBx + yBy + zBz (No Origin)
+        Identity Invariance : Command 08 - OfPoint difference equals OfVector difference
+        Inverse Round-Trip : Commands 09 & 10 - Model to Local Inversion
+    section Phase 3 : Real-World Geometry
+        Parameter Bridge : Command 05 - Sloped Conveyor 3D Trigonometry
         Architecture Router : Part B 01 - FamilyPlacementClassification
-        LocationCurve Geometry : Part B 03 - Path Length vs Chord
-        Face-Based Geometry : Part B 04 - BasisZ vs Normal Angle
-        Two-Level Geometry : Part B 05 - Level Span vs Physical Axis
-        Fallback Alignment : Part B 06 - Tri-Axial Dot-Product Scan
-    section Future Scope
-        Missing Inspect Commands : Part B 02, Adaptive, ViewBased
-        Geometry Modification : Move, Rotate, Mirror, Copy Elements
-```
-
-```mermaid
-flowchart LR
-    subgraph Completed["Completed Learning Surface"]
-        direction TB
-        PA["Part A: Commands 01-10<br/>Transform, Location, OfPoint, OfVector, Inverse, Synthetic Math"]
-        PB["Part B: Commands 01, 03-06<br/>Classification, LocationCurve, Face-Based, Two-Level, Fallback"]
-        C05["Bridge: Command 05<br/>Parameter-driven 3D Sloped Run"]
-    end
-
-    subgraph StoppingPoint["Current Stopping Point"]
-        STOP["Part B - Command 06<br/>TransformBasedFamilyGeometryCommand<br/>Universal Fallback Alignment"]
-    end
-
-    subgraph FutureModule["Future Extension - Geometry Modification"]
-        MOD["Geometry Modification Module<br/>Move / Rotate / Mirror / Copy Elements<br/>Requires Read-Write Transactions"]
-    end
-
-    Completed --> StoppingPoint
-    StoppingPoint -.-> FutureModule
-
-    style Completed fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
-    style StoppingPoint fill:#eff6ff,stroke:#2563eb,stroke-width:2px
-    style FutureModule fill:#faf5ff,stroke:#9333ea,stroke-width:2px
+        Curve Geometry : Part B 03 - Native Path Length vs Straight Chord
+        Face Geometry : Part B 04 - BasisZ vs Face Normal Dot Product
+        Two-Level Geometry : Part B 05 - Level Span vs Slanted Member Axis
+        Fallback Alignment : Part B 06 - Tri-Axial Dot Product Scanning
 ```
